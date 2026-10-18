@@ -3,6 +3,8 @@ import XCTest
 import UIKit
 import PDFKit
 import CoreImage
+import MWDATCore
+import MWDATMockDevice
 
 @MainActor
 final class AutoScanTests: XCTestCase {
@@ -110,6 +112,37 @@ final class AutoScanTests: XCTestCase {
     XCTAssertEqual(saver.saves, 1)
     model.stop()
   }
+  func testAIUnreadablePageStopsAfterTwoRequestsWithoutPDF() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let page = SolvedPage(readable: false, retakeReason: "The exponent is unclear.", title: "", problems: [])
+    let solver = FakePageSolver(page: page)
+    let saver = FakeSolutionSaver()
+    let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), solver, saver)
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await sendStableFrames(camera, model: model)
+    await waitUntil { camera.resumes == 1 && model.phase == .seeking }
+    try await sendStableFrames(camera, model: model)
+    await waitUntil { model.phase == .failed }
+    let calls = await solver.calls
+    XCTAssertEqual(calls, 2)
+    XCTAssertEqual(saver.saves, 0)
+    XCTAssertFalse(model.showPDF)
+    XCTAssertEqual(model.phase, .failed)
+    model.stop()
+  }
+  func testGlassesDisconnectAfterPhotoDoesNotDiscardSolution() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let solver = FakePageSolver(page: solvedPage(), delay: true)
+    let saver = FakeSolutionSaver()
+    let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), solver, saver)
+    model.importPhoto(camera.data)
+    await waitUntil { model.phase == .solving }
+    camera.onProblem?("Glasses disconnected")
+    await waitUntil { model.phase == .finished }
+    XCTAssertEqual(saver.saves, 1)
+    XCTAssertTrue(model.showPDF)
+    model.stop()
+  }
   func testCancelIgnoresLateAIResponse() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
     let solver = FakePageSolver(page: solvedPage(), delay: true)
@@ -122,6 +155,31 @@ final class AutoScanTests: XCTestCase {
     XCTAssertEqual(saver.saves, 0)
     XCTAssertFalse(model.showPDF)
     XCTAssertEqual(model.phase, .idle)
+  }
+  func testSDKPreviewToFullPhotoTransitionWithMockGlasses() async throws {
+    try? Wearables.configure()
+    MockDeviceKit.shared.enable()
+    let glasses = try MockDeviceKit.shared.pairGlasses(model: .rayBanMeta)
+    glasses.powerOn(); glasses.unfold(); glasses.don()
+    let camera = AutoScanCamera(wearables: Wearables.shared)
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent("scan-fixture-\(UUID()).jpg")
+    try paperImage().jpegData(compressionQuality: 0.95)!.write(to: file)
+    glasses.services.cameraCapture.setCapturedPhoto(fileURL: file)
+    let video = try XCTUnwrap(Bundle.main.url(forResource: "plant", withExtension: "mp4"))
+    glasses.services.camera.setCameraFeed(fileURL: video)
+    do {
+      try await camera.start()
+      let captured = try await camera.capture()
+      XCTAssertNotNil(UIImage(data: captured))
+      camera.stop()
+      await MockDeviceKit.shared.disable()
+      try? FileManager.default.removeItem(at: file)
+    } catch {
+      camera.stop()
+      await MockDeviceKit.shared.disable()
+      try? FileManager.default.removeItem(at: file)
+      throw error
+    }
   }
   func testMissingKeyDoesNotConnectOrUpload() {
     let camera = FakeScanCamera(data: Data())

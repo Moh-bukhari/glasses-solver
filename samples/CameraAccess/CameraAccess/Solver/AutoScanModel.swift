@@ -50,7 +50,11 @@ final class AutoScanModel {
     self.keyProvider = keyProvider; self.modelProvider = modelProvider
     camera.onFrame = { [weak self] image in self?.receive(image) }
     camera.onProblem = { [weak self] message in
-      guard let self, self.isRunning else { return }; self.fail(message)
+      guard let self, self.isRunning else { return }
+      if [.checking, .solving, .saving].contains(self.phase) {
+        // Once the still is on the phone, a glasses disconnect must not discard the job.
+        self.camera.stop()
+      } else { self.fail(message) }
     }
     camera.onProgress = { [weak self] fraction in
       guard let self, self.phase == .capturing else { return }
@@ -218,7 +222,12 @@ final class AutoScanModel {
     try await Task.sleep(for: .seconds(2))
     try Task.checkCancellation()
     guard runID == id else { return }
-    try await camera.resumePreview()
+    do { try await camera.resumePreview() }
+    catch {
+      try Task.checkCancellation()
+      guard runID == id else { return }
+      try await camera.start()
+    }
     gate.reset(); progress = 0; phase = .seeking; guide = reason
   }
 
