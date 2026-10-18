@@ -17,8 +17,8 @@ enum ScanCue: String, Sendable {
   var message: String {
     switch self {
     case .findProblem: return "Point at the problem. Keep the writing in view."
-    case .left: return "Look a little left."
-    case .right: return "Look a little right."
+    case .left: return "Turn your head a little left."
+    case .right: return "Turn your head a little right."
     case .tiltUp: return "Tilt your head up a little."
     case .tiltDown: return "Tilt your head down a little."
     case .closer: return "Move a little closer to the writing."
@@ -64,7 +64,7 @@ struct ContentFraming {
 
   /// Follow the text group nearest the center; distant background labels need not fit.
   static func primaryGroup(_ boxes: [CGRect]) -> [CGRect] {
-    var remaining = Array(boxes.filter { $0.width > 0.008 && $0.height > 0.003 }.prefix(200))
+    var remaining = Array(boxes.filter { $0.width > 0.008 && $0.height > 0.003 && $0.height < 0.25 }.prefix(200))
     guard let seed = remaining.indices.min(by: { distance(remaining[$0]) < distance(remaining[$1]) }) else { return [] }
     var group = [remaining.remove(at: seed)]
     var expanded = true
@@ -170,9 +170,13 @@ actor PageAnalyzer: PageAnalyzing {
     // Locate visible text only; no character recognition/transcription and no paper detector.
     // If text detection misses handwriting or a diagram, a steady detailed image can still proceed.
     let request = VNDetectTextRectanglesRequest()
-    request.reportCharacterBoxes = false
+    request.reportCharacterBoxes = true
     try? VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
-    let group = ContentFraming.primaryGroup((request.results ?? []).map(\.boundingBox))
+    // A sheet border can be reported as one giant "character". Use multi-character regions
+    // for aiming; this is shape detection, not OCR. Unmatched handwriting/diagrams still
+    // use the center-detail fallback and can capture without a text outline.
+    let text = (request.results ?? []).filter { ($0.characterBoxes?.count ?? 0) >= 2 }
+    let group = ContentFraming.primaryGroup(text.map(\.boundingBox))
     let bounds = group.isEmpty ? nil : group.reduce(CGRect.null) { $0.union($1) }
     let heights = group.map { Double($0.height) }.sorted()
     let lineHeight = heights.isEmpty ? 0 : heights[heights.count / 2]

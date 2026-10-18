@@ -114,6 +114,8 @@ final class AutoScanTests: XCTestCase {
     let analyzer = PageAnalyzer()
     let result = try await analyzer.prepare(problemImage(offCenter: true).jpegData(compressionQuality: 0.95)!)
     XCTAssertTrue(result.sample.acceptable, result.sample.issue ?? "")
+    XCTAssertNotNil(result.sample.contentBounds, "Real text detection must supply directions, not only the fallback.")
+    XCTAssertEqual(result.sample.cue, .tiltUp)
   }
   func testHTTPIncompleteRefusalAndInvalidResultDoNotProduceSolutions() throws {
     XCTAssertThrowsError(try SolverClient.decode(data: Data(), status: 401))
@@ -138,7 +140,7 @@ final class AutoScanTests: XCTestCase {
     XCTAssertTrue(good.acceptable, "\(good.issue ?? "") sharpness=\(good.sharpness)")
     let blank = paperImage(blank: true)
     let bad = try await analyzer.analyze(blank.cgImage!, still: true)
-    XCTAssertFalse(bad.acceptable)
+    XCTAssertFalse(bad.acceptable, "Blank sheet passed: bounds=\(String(describing: bad.contentBounds)) contrast=\(bad.contrast) sharpness=\(bad.sharpness)")
     let ci = CIImage(cgImage: clear.cgImage!).applyingFilter("CIGaussianBlur", parameters: ["inputRadius": 18.0])
     let blurred = CIContext().createCGImage(ci, from: CGRect(x: 0, y: 0, width: 1200, height: 1600))!
     let blur = try await analyzer.analyze(blurred, still: true)
