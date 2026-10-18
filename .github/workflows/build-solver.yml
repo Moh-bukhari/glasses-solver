@@ -26,7 +26,8 @@ jobs:
             -only-testing:CameraAccessTests/AutoScanTests \
             -parallel-testing-enabled NO -resultBundlePath TestResults.xcresult \
             -test-timeouts-enabled YES -default-test-execution-time-allowance 90 \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee tests.log
+            CODE_SIGN_IDENTITY="-" CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES \
+            DEVELOPMENT_TEAM="" 2>&1 | tee tests.log
       - name: Export test evidence
         if: always()
         run: |
