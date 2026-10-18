@@ -278,7 +278,9 @@ final class AutoScanTests: XCTestCase {
     glasses.services.camera.setCameraFeed(fileURL: video)
     do {
       try await camera.start()
-      await waitUntil { receivedFrame }
+      // A cold CI simulator can spend several seconds preparing the bundled video feed.
+      // Still require a delivered SDK frame; do not substitute a fake frame or skip this gate.
+      await waitUntil(timeout: 20) { receivedFrame }
       XCTAssertTrue(receivedFrame, "The preview must deliver images before automatic quality checks can run.")
       let captured = try await camera.capture()
       XCTAssertNotNil(UIImage(data: captured))
@@ -472,8 +474,8 @@ final class AutoScanTests: XCTestCase {
       try await Task.sleep(for: .milliseconds(350))
     }
   }
-  private func waitUntil(_ predicate: () -> Bool) async {
-    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+  private func waitUntil(timeout: Double = 5, _ predicate: () -> Bool) async {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(timeout))
     while !predicate() && ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(40)) }
   }
   private func solvedPage() -> SolvedPage {
