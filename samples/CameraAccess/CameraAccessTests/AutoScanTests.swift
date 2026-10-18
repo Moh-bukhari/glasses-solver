@@ -162,6 +162,8 @@ final class AutoScanTests: XCTestCase {
     let glasses = try MockDeviceKit.shared.pairGlasses(model: .rayBanMeta)
     glasses.powerOn(); glasses.unfold(); glasses.don()
     let camera = AutoScanCamera(wearables: Wearables.shared)
+    var receivedFrame = false
+    camera.onFrame = { _ in receivedFrame = true }
     let file = FileManager.default.temporaryDirectory.appendingPathComponent("scan-fixture-\(UUID()).jpg")
     try paperImage().jpegData(compressionQuality: 0.95)!.write(to: file)
     glasses.services.cameraCapture.setCapturedPhoto(fileURL: file)
@@ -169,6 +171,8 @@ final class AutoScanTests: XCTestCase {
     glasses.services.camera.setCameraFeed(fileURL: video)
     do {
       try await camera.start()
+      await waitUntil { receivedFrame }
+      XCTAssertTrue(receivedFrame, "The preview must deliver images before automatic quality checks can run.")
       let captured = try await camera.capture()
       XCTAssertNotNil(UIImage(data: captured))
       camera.stop()
