@@ -25,6 +25,7 @@ struct CapturePreviewView: View {
 
   @State private var player: AVPlayer?
   @State private var showShareSheet = false
+  @State private var showSolver = false
 
   init(preview: CapturePreview, onDismiss: @escaping () -> Void) {
     self.preview = preview
@@ -43,9 +44,14 @@ struct CapturePreviewView: View {
       VStack(spacing: 24) {
         mediaView
           .frame(maxWidth: .infinity)
-          .frame(height: 460)
+          .frame(maxHeight: 360)
           .clipShape(RoundedRectangle(cornerRadius: 12))
           .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
+
+        if case .photo = preview {
+          Button("Solve and create PDF") { showSolver = true }
+            .buttonStyle(.borderedProminent)
+        }
 
         CircleButton(icon: "square.and.arrow.up", text: "Share") {
           showShareSheet = true
@@ -66,6 +72,9 @@ struct CapturePreviewView: View {
         }
         Spacer()
       }
+    }
+    .sheet(isPresented: $showSolver) {
+      if case .photo(let image) = preview { SolverView(initialImage: image) }
     }
     .onAppear { player?.play() }
     .sheet(isPresented: $showShareSheet) {
