@@ -4,6 +4,7 @@ import Security
 import UIKit
 
 // Personal-device key: never included in the repository or build artifact.
+@MainActor
 enum SolverKeychain {
   static let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
     kSecAttrService as String: "GlassesSolver", kSecAttrAccount as String: "OpenAI"]

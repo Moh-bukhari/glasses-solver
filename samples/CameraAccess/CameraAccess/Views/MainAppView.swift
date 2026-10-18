@@ -24,12 +24,11 @@ struct MainAppView: View {
   var body: some View {
     TabView {
       Group {
-    if viewModel.registrationState == .registered {
-      CameraView(wearables: wearables, wearablesVM: viewModel)
-    } else {
-      // User not registered - show registration/onboarding flow
-      HomeScreenView(viewModel: viewModel)
-    }
+        if viewModel.registrationState == .registered {
+          CameraView(wearables: wearables, wearablesVM: viewModel)
+        } else {
+          HomeScreenView(viewModel: viewModel)
+        }
       }.tabItem { Label("Glasses", systemImage: "eyeglasses") }
       SolverView().tabItem { Label("Solve photo", systemImage: "doc.text.viewfinder") }
     }
