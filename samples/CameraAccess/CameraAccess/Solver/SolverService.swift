@@ -87,11 +87,14 @@ enum SolutionPDF {
   }
   static func render(page: SolvedPage, sources: [UIImage]) throws -> Data {
     let body = NSMutableAttributedString(string: "")
-    func append(_ text: String, size: CGFloat = 12, bold: Bool = false, color: UIColor = .black) {
-      let style = NSMutableParagraphStyle(); style.lineSpacing = 4; style.paragraphSpacing = 10
+    var keepWithNext: [NSRange] = []
+    func append(_ text: String, size: CGFloat = 12, bold: Bool = false, color: UIColor = .black, keep: Bool = false) {
+      let start = body.length
+      let style = NSMutableParagraphStyle(); style.lineSpacing = 4; style.paragraphSpacing = 6
       body.append(NSAttributedString(string: text + "\n", attributes: [
         .font: bold ? UIFont.boldSystemFont(ofSize: size) : UIFont.systemFont(ofSize: size),
         .foregroundColor: color, .paragraphStyle: style]))
+      if bold || keep { keepWithNext.append(NSRange(location: start, length: body.length - start)) }
     }
     append(page.title, size: 23, bold: true)
     append("Worked solution • \(Date().formatted(date: .abbreviated, time: .shortened))", size: 10, color: .darkGray)
@@ -108,7 +111,7 @@ enum SolutionPDF {
     for (index, problem) in page.problems.enumerated() {
       append(problem.label ?? "Problem \(index + 1)", size: 16, bold: true)
       if let pages = problem.sourcePages {
-        append("Source page(s): " + pages.map(String.init).joined(separator: ", "), size: 10, color: .darkGray)
+        append("Source page(s): " + pages.map(String.init).joined(separator: ", "), size: 10, color: .darkGray, keep: true)
       }
       if let note = problem.reviewNote, !note.trimmed.isEmpty {
         append(note, bold: note.hasPrefix("NEEDS REVIEW:"), color: .darkGray)
@@ -137,10 +140,23 @@ enum SolutionPDF {
         context.saveGState(); context.textMatrix = .identity
         context.translateBy(x: 0, y: bounds.height); context.scaleBy(x: 1, y: -1)
         let path = CGPath(rect: CGRect(x: 44, y: 64, width: 524, height: 670), transform: nil)
-        let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: offset, length: 0), path, nil)
+        var frame = CTFramesetterCreateFrame(framesetter, CFRange(location: offset, length: 0), path, nil)
+        var count = CTFrameGetVisibleStringRange(frame).length
+        let lines = CTFrameGetLines(frame) as! [CTLine]
+        if let last = lines.last {
+          let lineStart = CTLineGetStringRange(last).location
+          if let heading = keepWithNext.last(where: { NSLocationInRange(lineStart, $0) }) {
+            var cut = heading.location
+            // Move a trailing heading/source-reference chain together with its first content line.
+            while let previous = keepWithNext.last(where: { NSMaxRange($0) == cut }) { cut = previous.location }
+            if cut > offset {
+              frame = CTFramesetterCreateFrame(framesetter, CFRange(location: offset, length: cut - offset), path, nil)
+              count = CTFrameGetVisibleStringRange(frame).length
+            }
+          }
+        }
         CTFrameDraw(frame, context)
         context.restoreGState()
-        let count = CTFrameGetVisibleStringRange(frame).length
         if count == 0 { overflow = true; break }
         offset += count
       }

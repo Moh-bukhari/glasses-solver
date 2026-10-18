@@ -445,7 +445,7 @@ final class AutoScanTests: XCTestCase {
     var page = solvedPage(); page.coverage = "2 pages. All 2 subparts included."
     page = SolvedPage(readable: true, retakeReason: "", title: "Combined packet", problems: [
       SolvedProblem(problem: "First question", steps: ["First work"], answer: "FIRST ANSWER", check: "Check", label: "1(a)", sourcePages: [1]),
-      SolvedProblem(problem: "Second question", steps: ["Second work"], answer: "LAST ANSWER", check: "Check", label: "1(b)", sourcePages: [2], reviewNote: "NEEDS REVIEW: Missing unit")
+      SolvedProblem(problem: "Second question", steps: ["Second work"], answer: "LAST ANSWER", check: "SECOND VERIFICATION", label: "1(b)", sourcePages: [2], reviewNote: "NEEDS REVIEW: Missing unit")
     ], coverage: page.coverage, providers: "OpenAI + Claude")
     let data = try SolutionPDF.render(page: page, sources: [paperImage(), paperImage()])
     let pdf = try XCTUnwrap(PDFDocument(data: data)), text = (pdf.string ?? "").filter { !$0.isWhitespace }
@@ -453,6 +453,7 @@ final class AutoScanTests: XCTestCase {
       XCTAssertTrue(text.contains(marker), "Missing \(marker)")
     }
     XCTAssertGreaterThanOrEqual(pdf.pageCount, 3)
+    XCTAssertTrue((pdf.page(at: 0)?.string ?? "").contains("SECOND VERIFICATION"), "A short two-part solution should not strand its final check on an otherwise empty page.")
     let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "com.adobe.pdf")
     attachment.name = "batch-pdf-proof.pdf"; attachment.lifetime = .keepAlways; add(attachment)
   }
