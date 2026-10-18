@@ -19,7 +19,7 @@ jobs:
           set -o pipefail
           xcodebuild test -project samples/CameraAccess/CameraAccess.xcodeproj \
             -scheme CameraAccess -configuration Debug \
-            -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.4' \
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.4.1' \
             -only-testing:CameraAccessTests/AutoScanTests \
             -parallel-testing-enabled NO -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee tests.log

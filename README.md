@@ -1,3 +1,15 @@
+# Glasses Solver
+
+Personal iPhone app: **Start Auto Scan → hold a clear page → automatic capture → AI solution → PDF opens**.
+
+See [installation and usage](SOLVER-SETUP.md). Download the IPA from the latest successful [cloud build on solver-app](https://github.com/Moh-bukhari/glasses-solver/actions/workflows/build-solver.yml). The code is developed on the `solver-app` branch (PR #1).
+
+The app checks page geometry, blur and stability locally, requests a full-resolution still where supported, performs a final quality check, and opens a saved solution PDF. No OCR or image cleanup. One page per start, with bounded retakes and duplicate protection. Keep the app foregrounded. Hardware validation is distinct from the automated simulator checks.
+
+---
+
+## Upstream Meta SDK documentation
+
 # Meta Wearables Device Access Toolkit for iOS
 
 [![Swift Package](https://img.shields.io/badge/Swift_Package-1.0.1-brightgreen?logo=swift&logoColor=white)](https://github.com/facebook/meta-wearables-dat-ios/tags)

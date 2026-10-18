@@ -1,33 +1,45 @@
-# Glasses Solver — first device test
+# Glasses Solver 1.1 — automatic paper-to-PDF
 
-This fork adds direct photo analysis and a paginated PDF to Meta's CameraAccess sample. No OCR, crop, or image enhancement. Photos are encoded as JPEG at 95% quality without resizing. PDF uses readable plain-text math (not LaTeX typesetting).
+## Install the update from Windows
 
-## Windows installation
+1. Open [Build Glasses Solver IPA](https://github.com/Moh-bukhari/glasses-solver/actions/workflows/build-solver.yml). Pick the latest successful run on `solver-app`.
+2. Download **GlassesSolver-IPA** under Artifacts, then extract the ZIP.
+3. Connect your iPhone and import `GlassesSolver-unsigned.ipa` in the working iloader installation. Install over the existing app with the same Apple account so its settings and files can remain available.
+4. Open **Glasses Solver → Auto Scan**. Your existing API key/model should remain if the signing identity and Keychain access remain the same. Otherwise enter them again in Settings.
 
-1. Open this repository's **Actions → Build Glasses Solver IPA**. If GitHub disables workflows for this fork, enable them first. The `solver-app` branch builds on push; subsequent pushes retry it.
-2. Open a successful run and download **GlassesSolver-IPA** under Artifacts. Extract the downloaded ZIP to get `GlassesSolver-unsigned.ipa`.
-3. Connect your iPhone by USB. In the working iloader installation, import this IPA and sign/install with your Apple account.
-4. Trust the developer app and enable iPhone Developer Mode if prompted. Open **Glasses Solver**.
+No Mac or Apple credentials in GitHub are needed. The IPA is unsigned until iloader signs it. A passing build is not a test of your provisioning profile, glasses firmware, or account capabilities.
 
-No Apple password or API key belongs in GitHub. The build is unsigned; iloader must sign it. Meta's Wi-Fi entitlements may require an eligible provisioning profile; if signing fails, capture the exact error rather than stripping entitlements blindly. Free signing normally needs periodic refresh. A build passing is not proof that glasses registration works on your account.
+## Use it
 
-## First test: your existing Meta photo
+One-time setup: connect/register glasses through Meta AI, grant camera permission, and enter an OpenAI API key in Settings. API usage is billed separately from ChatGPT.
 
-1. Open **Solve photo → Settings**. Enter your own OpenAI API key (API billing is separate from ChatGPT). Default model is `gpt-4.1`; you can enter another image-capable Responses API model available to your account.
-2. Choose a clear paper photo already saved from Meta AI.
-3. Tap **Solve and create PDF**. Keep the app open while it works.
-4. Read the solution and tap **Share / Save PDF**. PDFs are also saved under Files → On My iPhone → Glasses Solver → Solutions.
+1. Put on the glasses, open **Auto Scan**, and tap **Start Auto Scan**.
+2. Put a well-lit paper against a contrasting surface. Keep all four corners visible and face it directly. Follow the spoken cues. The green outline and progress bar show when the page has been steady long enough.
+3. Keep still through “Capturing.” The app captures, checks the actual still, sends it to AI, creates the PDF, and opens it automatically. No import, shutter, Solve, or PDF-open tap is needed.
+4. Scanning stops after one successful page. Read/share the PDF or find it later in the **PDFs** tab. Start another scan for a new page.
 
-The key is stored in device-only Keychain, never in the IPA, logs, or repository. Clearing the key field and saving removes it. Only the selected photo is sent, when Solve is tapped, to api.openai.com. `store: false` disables Responses storage; this is not a promise of zero provider retention. This personal-device prototype should use a backend before being distributed to other users.
+Keep the app on screen and the phone unlocked during scanning/solving. Auto Scan temporarily prevents auto-lock and restores the previous setting afterward. Spoken cues use the current iPhone audio route; Bluetooth routing to glasses depends on iOS/audio settings. Backgrounding stops active scanning; initial Meta permission dialogs are an exception. This version does not promise locked-phone or voice-launch operation.
 
-## Glasses test
+**Import a paper photo** also checks and solves automatically. It is useful for testing your existing Meta AI photos before trying a live scan. If Settings opens because the key is missing, save the key and select the photo again.
 
-Enable Developer Mode in Meta AI for your glasses. In the **Glasses** tab, connect/register through Meta AI, start a session, start Preview, point at a well-lit page and tap the photo shutter. On the captured photo, choose **Solve and create PDF**, then Solve. Meta's sample manages permissions and session errors. You can retake a blurry capture before sending it.
+## Image quality and request limits
 
-This first version is explicit capture and solve, not continuous or hands-free monitoring. The existing stream-photo API is used; full-resolution standalone capture can be added after the baseline device test. Small math may require holding the page closer. Backgrounding stops the sample's glasses session; keep the app foregrounded during the first test. Network/model speed determines duration; two minutes is not guaranteed.
+- Local Vision rectangle detection checks page size, visible corners, angle, contrast, exposure and interior sharpness. A stability gate requires 1.5 seconds of good frames, limits gaps, and checks incremental movement, cumulative drift and image-content movement. Only one preview analysis runs at a time.
+- After detection, the preview stops and Meta's standalone Photo capability requests `.full` resolution and `.high` quality. This capability is experimental and must be supported by the glasses/account. Unsupported setup can fall back to stream-photo capture; the final photo still has to pass the same quality checks.
+- The whole photo is sent at its original dimensions as an orientation-normalized 95%-quality JPEG. There is no OCR, crop, perspective correction, or enhancement in the uploaded photo. A temporary interior crop is used only to measure blur.
+- A failed local quality check retakes without an API request, up to three captures per scan. The AI explicitly checks whether important symbols/edges are readable; at most one AI-requested retake is allowed (maximum two AI requests per scan). Uncertain network failures are not retried automatically, to avoid unexpected duplicate charges. A captured photo remains in memory for an explicit retry while the app stays alive.
+- Exactly one job runs at a time. Success stops scanning; the same page cannot repeatedly trigger requests. Stop/cancel invalidates late callbacks and late responses.
 
-## Build and verification
+These are conservative heuristics, not a guarantee that every tiny symbol is readable. Curved books, partial pages, very small print and unusual backgrounds may be rejected. Geometry/blur thresholds need real-device calibration. Check the problem transcription in the PDF.
 
-GitHub Actions uses macOS 26 / Xcode 26.4 with the sample's pinned Meta SDK 1.0.1. No signing secrets are needed to compile. Local Linux cannot compile UIKit or the binary iOS SDK. Check the actual Actions result before treating an IPA as ready.
+## PDFs and privacy
 
-Device acceptance: import an equation photo → readable complete PDF; invalid API key → actionable error; cancel → no PDF; long solution → multiple PDF pages; glasses register → preview → photo → solve. AI answers still need checking, especially if a symbol is ambiguous.
+Each successful job saves `Solution.pdf`, `Paper.jpg`, and `Solution.json` in **Files → On My iPhone → Glasses Solver → Solutions**. The in-app **PDFs** tab lists new saved solutions. PDFs include problem statements, numbered steps, answers, verification, page numbers and the source photograph. Math uses readable Unicode/plain-text expressions, not a LaTeX typesetting engine. Older version-1.0 PDFs remain available in Files.
+
+The API key stays in device-only Keychain. Clear it in Settings and save to remove it. Only accepted captures or explicitly imported photos are sent to `api.openai.com`; preview analysis stays local. `store: false` disables Responses storage, not all provider retention. This personal-device app would need a backend/credential design before public distribution. No live key is embedded in source, build logs, or the IPA.
+
+## Verification
+
+The workflow runs `AutoScanTests` on an iOS 26.4 simulator before building a Release IPA. Tests cover stable capture, movement/gaps/drift, local clarity/blur fixtures, automatic capture-to-solve-to-PDF transitions, local retakes without uploads, cancellation, missing keys, response decoding and PDF pagination. Synthetic fixtures and mocked AI responses prove software behavior; they do not prove live glasses quality or AI answer accuracy. Physical full-resolution capture, cue routing and natural page calibration still require the installed-device test.
+
+References: [Meta camera capture](https://github.com/facebook/meta-wearables-dat-ios/blob/main/plugins/mwdat-ios/skills/camera-capture/SKILL.md), [Apple rectangle detection](https://developer.apple.com/documentation/vision/vndetectrectanglesrequest), [OpenAI vision](https://developers.openai.com/api/docs/guides/images-vision), [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs).
