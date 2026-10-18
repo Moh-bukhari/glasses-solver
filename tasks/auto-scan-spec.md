@@ -1,3 +1,5 @@
+> Historical v1.2 contract. Superseded by [batch-solver-spec.md](batch-solver-spec.md) for v1.3.
+
 # Automatic paper-to-PDF acceptance contract
 
 One-time setup: API key, Meta registration/camera permission. Each scan: user presses Start Auto Scan, then uses no phone controls until the PDF opens.

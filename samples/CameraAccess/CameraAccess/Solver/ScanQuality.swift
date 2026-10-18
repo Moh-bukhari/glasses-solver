@@ -36,6 +36,8 @@ struct PageSample: Sendable {
   var contrast: Double = 0
   var sharpness: Double = 0
   var fingerprint: [Double] = []
+  var contentFingerprint: [Double] = []
+  var closeEnough = true
   var cue: ScanCue = .hold
   var issue: String? = nil
   var acceptable: Bool { issue == nil && !fingerprint.isEmpty }
@@ -57,7 +59,7 @@ struct ContentFraming {
       return dy > 0 ? .tiltUp : .tiltDown
     }
     if b.width > 0.97 || b.height > 0.97 { return .farther }
-    if (lineHeight > 0 && lineHeight * Double(imageHeight) < 8)
+    if (lineHeight > 0 && lineHeight * Double(imageHeight) < 10)
       || (b.width < 0.18 && b.height < 0.14) { return .closer }
     return .hold
   }
@@ -126,7 +128,7 @@ struct StabilityGate: Sendable {
 
   mutating func observe(_ sample: PageSample, at time: TimeInterval) -> Double {
     guard !latched else { return 1 }
-    guard sample.acceptable else { reset(); return 0 }
+    guard sample.acceptable && sample.closeEnough else { reset(); return 0 }
     let gap = lastTime.map { time - $0 > 1.1 || time <= $0 } ?? false
     let moved = previous.map { Self.movement($0, sample) > 0.045 || Self.imageDifference($0, sample) > 0.10 } ?? false
     let drifted = anchor.map { Self.movement($0, sample) > 0.065 || Self.imageDifference($0, sample) > 0.14 } ?? false
@@ -191,7 +193,9 @@ actor PageAnalyzer: PageAnalyzing {
     // A fixed full-frame fingerprint avoids false motion when detected text bounds change.
     let motion = Self.measure(image, longestSide: 192)
     var sample = PageSample(contentBounds: bounds, luminance: metrics.mean, contrast: metrics.contrast,
-      sharpness: metrics.sharpness, fingerprint: motion.fingerprint,
+      sharpness: metrics.sharpness, fingerprint: motion.fingerprint, contentFingerprint: metrics.fingerprint,
+      closeEnough: !(lineHeight > 0 && lineHeight * Double(image.height) < 10)
+        && !(bounds.map { $0.width < 0.18 && $0.height < 0.14 } ?? false),
       cue: ContentFraming.cue(bounds: bounds, lineHeight: lineHeight, imageHeight: image.height))
     // Only obvious darkness, missing detail, or heavy blur can veto a capture. Geometry cannot.
     if metrics.mean < 0.07 {
@@ -262,5 +266,26 @@ actor PageAnalyzer: PageAnalyzing {
       fingerprint.append(sum / max(1, count) - mean)
     } }
     return Metrics(mean: mean, contrast: sqrt(variance), sharpness: energy / Double((w - 2) * (h - 2)), fingerprint: fingerprint)
+  }
+}
+
+/// A saved sheet stays latched until the writing changes; head movement alone should not rearm it.
+/// Similar-looking pages can always be explicitly armed with the spoken "next page" command.
+struct PageTurnGate {
+  private var saved: PageSample?
+  private var savedAt = 0.0
+  private var changedFrames = 0
+  mutating func saved(_ sample: PageSample, at time: Double) { saved = sample; savedAt = time; changedFrames = 0 }
+  mutating func reset() { self = Self() }
+  mutating func observe(_ sample: PageSample, at time: Double) -> Bool {
+    guard let saved, time - savedAt >= 2, sample.acceptable, sample.closeEnough else { changedFrames = 0; return false }
+    let a = saved.contentFingerprint, b = sample.contentFingerprint
+    let changed: Bool
+    if !a.isEmpty, a.count == b.count {
+      let difference = zip(a, b).reduce(0.0) { $0 + abs($1.0 - $1.1) } / Double(a.count)
+      changed = difference > 0.065
+    } else { changed = StabilityGate.imageDifference(saved, sample) > 0.20 }
+    changedFrames = changed ? changedFrames + 1 : 0
+    return changedFrames >= 3
   }
 }

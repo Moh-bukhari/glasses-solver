@@ -79,8 +79,10 @@
 	<string>This app needs access to save photos captured from your glasses.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>This app needs camera access to stream from your phone's camera as a mock device feed.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Recognize on-device commands to finish scanning, scan the next page, or retake a page hands-free.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>This app needs microphone access to record sound from your glasses' microphone alongside video.</string>
+	<string>Listen for hands-free scan commands and record audio when you choose video recording.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

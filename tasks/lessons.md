@@ -12,3 +12,6 @@ Meta's SDK resolves a keychain access group during initialization. Simulator tes
 
 - A readable problem photo does not need a detected paper rectangle. Never make clean background, all four page corners or a straight-on sheet prerequisites for this workflow. Use preview hints to obtain a still; let AI assess the actual problem.
 - Positioning cues must specify the wearer’s camera direction. Debounce changes, say “hold” promptly, and allow reminders; an announcement cooldown must not suppress the first useful direction.
+- A nonempty AI response is not evidence that every subpart was solved. Build an inventory of all photographed questions, validate exact coverage, and visibly flag unresolved items before generating a PDF.
+- Forgiving framing must not mean accepting tiny distant writing after a timeout. Gate on useful text detail, not paper/background geometry, and keep the original photo.
+- Batch capture must wait for explicit completion before uploading, retain ordered pages on failure, and avoid repeatedly photographing the same stationary sheet. Quiet spoken guidance needs its own low default volume and must not trigger its own voice commands.

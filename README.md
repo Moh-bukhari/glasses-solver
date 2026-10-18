@@ -1,10 +1,12 @@
 # Glasses Solver
 
-Personal iPhone app (1.2): **Start Auto Scan → look at a problem → automatic capture → AI solution → PDF opens**.
+Personal iPhone app (1.3): **scan papers → say “finish scanning” → OpenAI + Claude review → one combined PDF**.
 
-See [installation and usage](SOLVER-SETUP.md). Download the IPA from the latest successful [cloud build on solver-app](https://github.com/Moh-bukhari/glasses-solver/actions/workflows/build-solver.yml). The code is developed on the `solver-app` branch (PR #1).
+See [installation and usage](SOLVER-SETUP.md). Download the IPA from a successful [cloud build on solver-app](https://github.com/Moh-bukhari/glasses-solver/actions/workflows/build-solver.yml), with both build and verification jobs passing. Code is developed on the `solver-app` branch (PR #1).
 
-The app checks page geometry, blur and stability locally, requests a full-resolution still where supported, performs a final quality check, and opens a saved solution PDF. No OCR or image cleanup. One page per start, with bounded retakes and duplicate protection. Keep the app foregrounded. Hardware validation is distinct from the automated simulator checks.
+Capture close-up photos with directional voice cues, saved-page announcements, and a quiet 5% speech default. No clean background, paper corners, OCR or image cleanup is required. Collect up to 12 photos before any AI upload; drafts survive pauses and failures. OpenAI and Claude can independently solve the packet and reconcile their answers against a question/subpart checklist. Single-provider modes are also available. One PDF contains all inventoried answers, review flags and source photos.
+
+Keep the app foregrounded and unlocked. On-device English voice commands require microphone/speech permission; visible controls remain available. Simulator fixtures do not verify physical glasses, microphone routing or mathematical accuracy with live APIs.
 
 ---
 

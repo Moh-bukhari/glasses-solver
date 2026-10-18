@@ -1,47 +1,68 @@
-# Glasses Solver 1.2 — automatic paper-to-PDF
+# Glasses Solver 1.3 — scan a packet, receive one PDF
 
-## Install the update from Windows
+## Install from Windows
 
-1. Open [Build Glasses Solver IPA](https://github.com/Moh-bukhari/glasses-solver/actions/workflows/build-solver.yml). Pick the latest successful run on `solver-app`.
-2. Download **GlassesSolver-IPA** under Artifacts, then extract the ZIP.
-3. Connect your iPhone and import `GlassesSolver-unsigned.ipa` in the working iloader installation. Install over the existing app with the same Apple account so its settings and files can remain available.
-4. Open **Glasses Solver → Auto Scan**. Your existing API key/model should remain if the signing identity and Keychain access remain the same. Otherwise enter them again in Settings.
+1. Open [Build Glasses Solver IPA](https://github.com/Moh-bukhari/glasses-solver/actions/workflows/build-solver.yml). Choose the latest `solver-app` run where **both** the verify and build jobs passed.
+2. Download **GlassesSolver-IPA** under Artifacts and extract the ZIP.
+3. Use your working iloader installation to install `GlassesSolver-unsigned.ipa` over the existing app, with the same Apple account/signing identity. Do not delete the existing app first. Its files and OpenAI key should remain when signing/Keychain access is unchanged.
+4. Open **Glasses Solver → Auto Scan → Settings**. Choose **OpenAI + Claude** and enter both API keys. Existing OpenAI credentials are preserved. Claude uses a separate Keychain entry. Single-provider modes are available if you have only one key.
+5. Save settings. Allow Microphone and Speech Recognition when prompted for hands-free commands. Meta registration/camera permission may also need a one-time approval.
 
-No Mac or Apple credentials in GitHub are needed. The IPA is unsigned until iloader signs it. A passing build is not a test of your provisioning profile, glasses firmware, or account capabilities.
+No Mac is needed. GitHub builds an unsigned IPA; iloader signs it on installation. Account provisioning and real-glasses compatibility still require the device test.
 
-## Use it
+## Hands-free batch workflow
 
-One-time setup: connect/register glasses through Meta AI, grant camera permission, and enter an OpenAI API key in Settings. API usage is billed separately from ChatGPT.
+1. Open **Auto Scan** and tap **Start scanning pages**.
+2. Hold the first paper close enough that small writing is readable. Follow head/camera directions: left/right, tilt up/down, closer/back, then hold still. Capture starts on the first stable usable view, without demanding a clean background or sheet corners.
+3. Wait for **“Page 1 saved”**, then turn to the next page. A changed writing region rearms capture. For similar-looking pages, say **“next page”** after turning the page. This also prevents a stationary page from being repeatedly captured.
+4. Repeat for the whole packet. Say **“retake last page”** if a capture was wrong. The previous photo stays saved until a clear replacement arrives.
+5. Say **“finish scanning”**. Only now are the photos uploaded. The app announces the checklist, solving, comparison and PDF stages. The combined PDF opens automatically.
 
-1. Put on the glasses, open **Auto Scan**, and tap **Start Auto Scan**.
-2. Look at the problem you want to solve. Paper corners, a clean background, and a perfectly straight angle are not required. Follow the spoken directions: look left/right, tilt your head up/down, move closer/back, then hold still. Directions refer to your head/camera. An optional outline follows the writing, not the paper.
-3. When you hear “Hold still,” stay steady through “Capturing.” The app captures, checks the actual still, sends it to AI, creates the PDF, and opens it automatically. No import, shutter, Solve, or PDF-open tap is needed.
-4. Scanning stops after one successful photo. Read/share the PDF or find it later in the **PDFs** tab. Start another scan for a new page.
+**“Cancel scanning”** pauses and keeps the draft. On-screen Next/Finish/Pause buttons are available. If English on-device speech is unavailable or permission is denied, the app reports that and provides the Finish button; it does not secretly send microphone audio to a cloud recognizer.
 
-Keep the app on screen and the phone unlocked during scanning/solving. Auto Scan temporarily prevents auto-lock and restores the previous setting afterward. Spoken cues use the current iPhone audio route; Bluetooth routing to glasses depends on iOS/audio settings. Backgrounding stops active scanning; initial Meta permission dialogs are an exception. This version does not promise locked-phone or voice-launch operation.
+Keep the app visible and iPhone unlocked throughout capture and solving. Auto-lock is temporarily disabled. Backgrounding cancels active work while preserving saved photos. Initial Meta permission handoff is an exception. This version does not promise locked-phone operation. Speech uses iOS's selected route; real glasses microphone/audio routing needs a physical test.
 
-**Import a paper photo** also checks and solves automatically. It is useful for testing your existing Meta AI photos before trying a live scan. If Settings opens because the key is missing, save the key and select the photo again.
+Cues and progress speech default to **5%**, the lowest available nonzero app setting. Settings contains a volume slider and quiet reset. System volume still applies. App speech is excluded from recognition so it cannot finish its own batch.
 
-## Image quality and request limits
+## Saved pages and imported photos
 
-- The preview only helps aim and hold steady. Apple Vision locates text regions without transcribing characters. It does not search for paper corners. The main text group nearest the center guides positioning; unrelated background labels are ignored when separable.
-- Framing advice is deliberately forgiving. A good position needs about 1.5 seconds of steadiness. A steady view with imperfect framing, handwriting or no detected text region can still capture after about 3 seconds, then let the AI check the actual photo. Directions settle before being spoken; “hold still” can interrupt them promptly, and useful reminders can repeat.
-- Local checks only block obvious darkness, missing detail or heavy blur. There is no full-sheet, clean-background, perspective or minimum-800-pixel requirement. The phone still checks motion, sample gaps and drift; one preview analysis runs at a time.
-- After detection, the preview stops and Meta's standalone Photo capability requests `.full` resolution and `.high` quality. This capability is experimental and must be supported by the glasses/account. Unsupported setup can fall back to stream-photo capture; the final photo still has to pass the same quality checks.
-- The whole photo is sent at its original dimensions as an orientation-normalized 95%-quality JPEG. There is no OCR, crop, perspective correction, or enhancement in the uploaded photo. A temporary writing-region crop (or the center when no text region is found) is used only to measure detail. Fixed full-frame pixels measure steadiness.
-- A failed local quality check retakes without an API request, up to three captures per scan. The AI checks that the targeted problem’s essential instructions, symbols and diagrams are readable, while ignoring irrelevant background text and partial neighboring problems; at most one AI-requested retake is allowed (maximum two AI requests per scan). Uncertain network failures are not retried automatically, to avoid unexpected duplicate charges. A captured photo remains in memory for an explicit retry while the app stays alive.
-- Exactly one job runs at a time. Success stops scanning; the same page cannot repeatedly trigger requests. Stop/cancel invalidates late callbacks and late responses.
+The ordered queue shows page numbers and thumbnails. Pause before using **Retake**, **Replace photo**, or **Remove** on an individual page. **Add a paper photo** adds an existing Meta AI/photo-library image to the same batch. Imports are collected before solving, just like glasses photos.
 
-A normal photo of one complete problem is enough; the whole sheet is optional. These local heuristics cannot prove that every symbol is readable or identify your intended problem perfectly. The AI makes the final content check and may request a clearer view. Capture timing, voice routing and thresholds still need real-glasses trials. Check the problem transcription in the PDF.
+Draft originals are saved immediately in the app's `ScanDraft` directory. Errors, pauses and app restarts retain them. If the AI flags unreadable content, its message names the source page; replace that photo and finish again. Retrying the batch repeats its AI work and can incur additional API usage. **New batch** clears the draft after confirmation; finished PDFs remain.
 
-## PDFs and privacy
+## What the two models do
 
-Each successful job saves `Solution.pdf`, `Paper.jpg`, and `Solution.json` in **Files → On My iPhone → Glasses Solver → Solutions**. The in-app **PDFs** tab lists new saved solutions. PDFs include problem statements, numbered steps, answers, verification, page numbers and the source photograph. Math uses readable Unicode/plain-text expressions, not a LaTeX typesetting engine. Older version-1.0 PDFs remain available in Files.
+1. OpenAI inventories every source page and every numbered/lettered subpart, including shared definitions and continuations.
+2. Claude audits that checklist against all photos and adds missed subparts.
+3. OpenAI and Claude solve each group of up to six subparts independently, with the full packet as context.
+4. OpenAI compares both drafts against the photos, recomputes disputed results, and returns one worked solution per required ID.
+5. The app rejects missing/duplicate IDs, empty answers, missing work/checks and truncated output. It creates the PDF only after all groups pass. Unresolved mathematical/data uncertainty is visibly marked **NEEDS REVIEW**.
 
-The API key stays in device-only Keychain. Clear it in Settings and save to remove it. Only accepted captures or explicitly imported photos are sent to `api.openai.com`; preview analysis stays local. `store: false` disables Responses storage, not all provider retention. This personal-device app would need a backend/credential design before public distribution. No live key is embedded in source, build logs, or the IPA.
+Single-provider mode uses that API for inventory, solving and a separate review. A checklist improves coverage but cannot prove that the models read every symbol correctly or that a numerical answer is correct. Check the transcriptions and flagged items in the PDF.
+
+## Quality, size and usage limits
+
+- Up to **12 source photos and 60 question subparts** per batch. Larger packets need separate batches.
+- No OCR transcription, perspective correction or enhancement. Vision locates writing for guidance. Actual stills are checked for gross blur/darkness/detail. Tiny detected writing requests a closer view instead of timing out into a distant capture. Missing text outlines can still use a stable detail fallback for handwriting/diagrams.
+- About 1.5 seconds of steady, readable framing triggers capture; imperfect positioning/no text outline allows a longer 3-second hold. Cues are debounced, with prompt “hold” and periodic reminders. A page has up to three local capture attempts; failed local checks incur no AI requests.
+- Full/high standalone Meta photos are requested where supported, with the existing stream-photo fallback for unsupported setup. Stop/receive/resume transitions remain SDK-state driven.
+- Full orientation-normalized JPEG originals are retained. API transport copies preserve the whole composition, use at most 2576 pixels on the long edge, and up to 1.5 MB JPEG each. These limits keep the complete batch under request-size limits. There is no automatic crop. The PDF embeds readable source previews; full originals remain alongside it.
+- Both mode normally uses **2 + 3 × ceil(subparts / 6)** requests (at most 32). Single-provider mode uses **1 + 2 × ceil(subparts / 6)** (at most 21). Each malformed/truncated/missing-item response can get **one** repair, so worst-case limits double. Authentication, network, refusal, rate-limit and service errors are not blindly retried.
+- Every request has a time limit. Long packets and two-model review can take substantially more than a couple of minutes. API credit is billed by each selected provider.
+- Only one batch runs at a time. Cancellation invalidates late callbacks and prevents subsequent stages/PDF saves.
+
+## PDFs and credentials
+
+Each finished packet saves `Solution.pdf`, `Solution.json`, `Paper.jpg`, and subsequent `Paper-2.jpg` etc. in **Files → On My iPhone → Glasses Solver → Solutions**. The **PDFs** tab lists results. Each PDF contains a coverage checklist, original labels, source-page references, worked calculations, answers, checks, review flags and all source photographs. Math uses Unicode/plain text rather than a LaTeX typesetting engine. Older solutions remain readable.
+
+Keys are stored in separate, device-only Keychain accounts and are sent only in authentication headers to their corresponding API. Never put keys in GitHub or chat. Both mode sends the packet and draft answers to both services; neither key is shared with the other provider. Preview analysis and speech recognition stay on device. OpenAI requests set `store: false`; that is not a guarantee about all provider retention.
+
+Default Claude model: `claude-sonnet-5-5`, with an Opus 5.5 preset and editable model IDs. OpenAI retains the existing `solverModel` preference, defaulting to `gpt-5.4`. Availability depends on your provider account.
 
 ## Verification
 
-The workflow runs `AutoScanTests` on an iOS 26.4.1 simulator alongside a separate Release IPA build; use a run only when both jobs pass. Tests cover directional coordinates, voice debounce/repetition, forgiving framing and missing-text fallback, borderless/cluttered/tilted/720-pixel photos, stable capture, movement/gaps/drift, local clarity/blur fixtures, automatic capture-to-solve-to-PDF transitions, local retakes without uploads, cancellation, missing keys, response decoding and PDF pagination. Synthetic fixtures and mocked AI responses prove software behavior; they do not prove live glasses quality or AI answer accuracy. Physical full-resolution capture, cue routing and natural page calibration still require the installed-device test.
+GitHub Actions compiles a Release iPhone IPA and runs `AutoScanTests` on the iOS simulator, including the real Meta mock-device camera transition. Fixtures cover clarity/stability, close-up gating, page-turn latching, voice parsing/default volume, batch finish behavior, ordered draft persistence, cancellation, both API envelopes, credential separation, bounded recovery, complete-answer validation and multi-source PDF pagination.
 
-References: [Meta camera capture](https://github.com/facebook/meta-wearables-dat-ios/blob/main/plugins/mwdat-ios/skills/camera-capture/SKILL.md), [Apple text-region detection](https://developer.apple.com/documentation/vision/vndetecttextrectanglesrequest), [OpenAI vision](https://developers.openai.com/api/docs/guides/images-vision), [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs).
+No paid live API keys or physical glasses/microphone are available in CI. Passing tests are evidence for software behavior, not a claim of hardware/voice recognition accuracy or correct answers to arbitrary papers.
+
+References: [Claude vision and limits](https://platform.claude.com/docs/en/build-with-claude/vision), [Claude structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs), [Claude model IDs](https://platform.claude.com/docs/en/models/overview), [OpenAI vision](https://developers.openai.com/api/docs/guides/images-vision), [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs), [Apple speech volume](https://developer.apple.com/documentation/avfaudio/avspeechutterance/volume), [Meta camera capture](https://github.com/facebook/meta-wearables-dat-ios/blob/main/plugins/mwdat-ios/skills/camera-capture/SKILL.md).
