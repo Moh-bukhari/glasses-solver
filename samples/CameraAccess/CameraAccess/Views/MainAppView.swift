@@ -23,6 +23,7 @@ struct MainAppView: View {
 
   var body: some View {
     TabView {
+      AutoScanView(wearablesVM: viewModel).tabItem { Label("Auto Scan", systemImage: "viewfinder") }
       Group {
         if viewModel.registrationState == .registered {
           CameraView(wearables: wearables, wearablesVM: viewModel)
@@ -30,7 +31,7 @@ struct MainAppView: View {
           HomeScreenView(viewModel: viewModel)
         }
       }.tabItem { Label("Glasses", systemImage: "eyeglasses") }
-      SolverView().tabItem { Label("Solve photo", systemImage: "doc.text.viewfinder") }
+      SolutionHistoryView().tabItem { Label("PDFs", systemImage: "doc.richtext") }
     }
   }
 }

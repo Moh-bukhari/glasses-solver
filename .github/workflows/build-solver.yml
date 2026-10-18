@@ -9,11 +9,20 @@ permissions:
 jobs:
   build:
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 40
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.4.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
+      - name: Test automatic scan pipeline
+        run: |
+          set -o pipefail
+          xcodebuild test -project samples/CameraAccess/CameraAccess.xcodeproj \
+            -scheme CameraAccess -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.4' \
+            -only-testing:CameraAccessTests/AutoScanTests \
+            -parallel-testing-enabled NO -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee tests.log
       - name: Build unsigned iPhone app
         run: |
           set -o pipefail
@@ -38,3 +47,10 @@ jobs:
         with:
           name: build-log
           path: build.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: |
+            tests.log
+            TestResults.xcresult
