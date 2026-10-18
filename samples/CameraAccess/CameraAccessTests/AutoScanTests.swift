@@ -70,8 +70,12 @@ final class AutoScanTests: XCTestCase {
     let data = try SolutionPDF.render(page: page, source: paperImage())
     let pdf = try XCTUnwrap(PDFDocument(data: data))
     XCTAssertGreaterThan(pdf.pageCount, 3)
-    XCTAssertTrue(pdf.string?.contains("FINAL_SENTINEL") == true)
-    XCTAssertTrue(pdf.string?.contains("Source photograph") == true)
+    let extracted = pdf.string ?? ""
+    // PDFKit may insert whitespace between independently positioned glyphs.
+    let compact = extracted.filter { !$0.isWhitespace }
+    XCTAssertTrue(compact.contains("FINAL_SENTINEL"), String(extracted.suffix(1800)))
+    XCTAssertTrue(compact.contains("180.Step180:"))
+    XCTAssertTrue(compact.contains("Sourcephotograph"))
     let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "com.adobe.pdf")
     attachment.name = "pagination-proof.pdf"; attachment.lifetime = .keepAlways; add(attachment)
   }
@@ -161,6 +165,10 @@ final class AutoScanTests: XCTestCase {
     MockDeviceKit.shared.enable()
     let glasses = try MockDeviceKit.shared.pairGlasses(model: .rayBanMeta)
     glasses.powerOn(); glasses.unfold(); glasses.don()
+    await waitUntil { Wearables.shared.devices.contains(glasses.deviceIdentifier) }
+    XCTAssertEqual(Wearables.shared.registrationState, .registered)
+    MockDeviceKit.shared.permissions.set(.camera, .granted)
+    MockDeviceKit.shared.permissions.setRequestResult(.camera, result: .granted)
     let camera = AutoScanCamera(wearables: Wearables.shared)
     var receivedFrame = false
     camera.onFrame = { _ in receivedFrame = true }

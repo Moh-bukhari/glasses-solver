@@ -46,6 +46,10 @@ final class AutoScanCamera: ScanCamera {
 
   func start() async throws {
     stop()
+    // Permission lookup needs a connected device, including when a device was just paired.
+    try await wait(seconds: 12, message: "Put on your connected glasses and try again.") {
+      self.selector.activeDevice != nil
+    }
     // Request permission before starting a device session: Meta AI temporarily backgrounds us.
     if try await wearables.checkPermissionStatus(.camera) != .granted {
       guard try await wearables.requestPermission(.camera) == .granted else {
@@ -53,9 +57,6 @@ final class AutoScanCamera: ScanCamera {
       }
     }
     try Task.checkCancellation()
-    try await wait(seconds: 12, message: "Put on your connected glasses and try again.") {
-      self.selector.activeDevice != nil
-    }
     let id = generation
     let newSession = try wearables.createSession(deviceSelector: selector)
     session = newSession
