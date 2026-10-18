@@ -65,15 +65,16 @@ final class AutoScanTests: XCTestCase {
     XCTAssertFalse(blur.acceptable, "Blur unexpectedly passed: \(blur.sharpness)")
   }
   func testPDFContainsLastStepAcrossPagesAndSourcePhoto() throws {
-    let problem = SolvedProblem(problem: "Solve 2x + 3 = 11", steps: (1...180).map { "Step \($0): subtract three and divide by two. Check the equation carefully. This line must survive pagination." }, answer: "FINAL_SENTINEL x = 4", check: "2 × 4 + 3 = 11")
+    let problem = SolvedProblem(problem: "Solve 2x + 3 = 11", steps: (1...180).map { "Step \($0): subtract three and divide by two. Check the equation carefully. This line must survive pagination." }, answer: "FINAL SENTINEL x = 4", check: "2 × 4 + 3 = 11")
     let page = SolvedPage(readable: true, retakeReason: "", title: "Pagination test", problems: [problem])
     let data = try SolutionPDF.render(page: page, source: paperImage())
     let pdf = try XCTUnwrap(PDFDocument(data: data))
     XCTAssertGreaterThan(pdf.pageCount, 3)
     let extracted = pdf.string ?? ""
-    // PDFKit may insert whitespace between independently positioned glyphs.
+    // PDFKit may insert whitespace and move underscore glyphs into a later text run.
+    // Use words for the marker and assert the final answer too; visual layout is reviewed separately.
     let compact = extracted.filter { !$0.isWhitespace }
-    XCTAssertTrue(compact.contains("FINAL_SENTINEL"), String(extracted.suffix(1800)))
+    XCTAssertTrue(compact.contains("FINALSENTINELx=4"), String(extracted.suffix(1800)))
     XCTAssertTrue(compact.contains("180.Step180:"))
     XCTAssertTrue(compact.contains("Sourcephotograph"))
     let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "com.adobe.pdf")
