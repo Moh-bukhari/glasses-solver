@@ -9,8 +9,7 @@ import MWDATMockDevice
 @MainActor
 final class AutoScanTests: XCTestCase {
   func goodSample(shift: Double = 0) -> PageSample {
-    PageSample(corners: [PagePoint(x: 0.2 + shift, y: 0.8), PagePoint(x: 0.8 + shift, y: 0.8),
-      PagePoint(x: 0.8 + shift, y: 0.2), PagePoint(x: 0.2 + shift, y: 0.2)],
+    PageSample(contentBounds: CGRect(x: 0.2 + shift, y: 0.2, width: 0.6, height: 0.6),
       luminance: 0.8, contrast: 0.2, sharpness: 0.02, fingerprint: Array(repeating: 0.05, count: 256))
   }
 
@@ -25,7 +24,7 @@ final class AutoScanTests: XCTestCase {
     var gate = StabilityGate()
     _ = gate.observe(goodSample(), at: 0)
     _ = gate.observe(goodSample(), at: 0.4)
-    XCTAssertEqual(gate.observe(goodSample(shift: 0.04), at: 0.8), 0)
+    XCTAssertEqual(gate.observe(goodSample(shift: 0.08), at: 0.8), 0)
     XCTAssertEqual(gate.observe(PageSample(issue: "blur"), at: 1.1), 0)
     XCTAssertEqual(gate.observe(goodSample(), at: 1.4), 0)
     XCTAssertEqual(gate.observe(goodSample(), at: 3.4), 0)
@@ -33,7 +32,88 @@ final class AutoScanTests: XCTestCase {
   }
   func testSlowCumulativeDriftCannotTrigger() {
     var gate = StabilityGate()
-    for n in 0..<20 { XCTAssertLessThan(gate.observe(goodSample(shift: Double(n) * 0.008), at: Double(n) * 0.3), 1) }
+    for n in 0..<20 { XCTAssertLessThan(gate.observe(goodSample(shift: Double(n) * 0.02), at: Double(n) * 0.3), 1) }
+  }
+  func testDirectionalCuesFollowWritingInWearerCoordinates() {
+    func cue(_ x: Double, _ y: Double, _ w: Double, _ h: Double, line: Double = 0.025) -> ScanCue {
+      ContentFraming.cue(bounds: CGRect(x: x, y: y, width: w, height: h), lineHeight: line, imageHeight: 1280)
+    }
+    XCTAssertEqual(cue(0.01, 0.42, 0.25, 0.16), .left)
+    XCTAssertEqual(cue(0.78, 0.42, 0.20, 0.16), .right)
+    XCTAssertEqual(cue(0.3, 0.84, 0.4, 0.1), .tiltUp)
+    XCTAssertEqual(cue(0.3, 0.04, 0.4, 0.1), .tiltDown)
+    XCTAssertEqual(cue(0.44, 0.44, 0.12, 0.12), .closer)
+    XCTAssertEqual(cue(0.2, 0.4, 0.6, 0.1, line: 0.004), .closer)
+    XCTAssertEqual(cue(0.005, 0.2, 0.99, 0.6), .farther)
+    XCTAssertEqual(cue(0.08, 0.17, 0.8, 0.66), .hold)
+    XCTAssertEqual(ContentFraming.cue(bounds: nil, lineHeight: 0, imageHeight: 1280), .findProblem)
+  }
+  func testBackgroundLabelsDoNotPullTargetAwayFromCenter() {
+    let target = CGRect(x: 0.25, y: 0.46, width: 0.5, height: 0.06)
+    let background = CGRect(x: 0.82, y: 0.90, width: 0.12, height: 0.04)
+    XCTAssertEqual(ContentFraming.primaryGroup([background, target]), [target])
+  }
+  func testFramingAdviceAndMissingTextOutlineCannotBlockAStablePhoto() {
+    for cue in [ScanCue.left, .closer, .farther, .findProblem] {
+      var gate = StabilityGate(), sample = goodSample()
+      sample.contentBounds = nil; sample.cue = cue
+      XCTAssertTrue(sample.acceptable)
+      for n in 0..<10 { XCTAssertLessThan(gate.observe(sample, at: Double(n) * 0.3), 1) }
+      XCTAssertEqual(gate.observe(sample, at: 3), 1)
+    }
+  }
+  func testTextDetectionJitterIsToleratedButImageMotionResetsHold() {
+    var gate = StabilityGate()
+    for n in 0...5 {
+      var sample = goodSample()
+      if n % 2 == 0 { sample.contentBounds = CGRect(x: 0.2, y: 0.2, width: 0.6, height: 0.2) }
+      let value = gate.observe(sample, at: Double(n) * 0.3)
+      if n == 5 { XCTAssertEqual(value, 1) }
+    }
+    gate.reset()
+    var sample = goodSample(); sample.contentBounds = nil
+    _ = gate.observe(sample, at: 0)
+    sample.fingerprint = Array(repeating: 0.3, count: 256)
+    XCTAssertEqual(gate.observe(sample, at: 0.4), 0)
+    XCTAssertFalse(gate.latched)
+  }
+  func testVoiceDirectionsDebounceRepeatAndYieldPromptlyToHold() {
+    var voice = GuidanceSpeechGate()
+    XCTAssertFalse(voice.shouldSpeak(.left, at: 0))
+    XCTAssertTrue(voice.shouldSpeak(.left, at: 0.35))
+    XCTAssertFalse(voice.shouldSpeak(.right, at: 0.5))
+    XCTAssertFalse(voice.shouldSpeak(.right, at: 0.85))
+    XCTAssertTrue(voice.shouldSpeak(.hold, at: 1.2))
+    XCTAssertFalse(voice.shouldSpeak(.hold, at: 1.3))
+    XCTAssertTrue(voice.shouldSpeak(.hold, at: 8.3))
+    voice.reset()
+    voice.noteAnnouncement(at: 0)
+    XCTAssertFalse(voice.shouldSpeak(.right, at: 0.1))
+    XCTAssertTrue(voice.shouldSpeak(.right, at: 0.9), "The ready announcement must not suppress the first direction.")
+    XCTAssertFalse(voice.shouldSpeak(.right, at: 2))
+    XCTAssertTrue(voice.shouldSpeak(.right, at: 8))
+  }
+  func testBorderlessProblemAnd720PixelPhotoPassWithoutCleanup() async throws {
+    let analyzer = PageAnalyzer(), image = problemImage()
+    let preview = try await analyzer.analyze(image.cgImage!, still: false)
+    XCTAssertTrue(preview.acceptable, preview.issue ?? "")
+    let prepared = try await analyzer.prepare(image.jpegData(compressionQuality: 0.95)!)
+    XCTAssertTrue(prepared.sample.acceptable, prepared.sample.issue ?? "")
+    XCTAssertEqual(prepared.width, 720)
+    XCTAssertEqual(prepared.height, 1280)
+    let decoded = try XCTUnwrap(UIImage(data: prepared.jpeg)?.cgImage)
+    XCTAssertEqual(decoded.width, 720)
+    XCTAssertEqual(decoded.height, 1280)
+  }
+  func testClutteredBackgroundAndPartialTiltedPaperAreAllowed() async throws {
+    let analyzer = PageAnalyzer()
+    let result = try await analyzer.analyze(problemImage(cluttered: true).cgImage!, still: true)
+    XCTAssertTrue(result.acceptable, "\(result.issue ?? "") sharpness=\(result.sharpness)")
+  }
+  func testOffCenterStillCanBeSentDespitePositioningAdvice() async throws {
+    let analyzer = PageAnalyzer()
+    let result = try await analyzer.prepare(problemImage(offCenter: true).jpegData(compressionQuality: 0.95)!)
+    XCTAssertTrue(result.sample.acceptable, result.sample.issue ?? "")
   }
   func testHTTPIncompleteRefusalAndInvalidResultDoNotProduceSolutions() throws {
     XCTAssertThrowsError(try SolverClient.decode(data: Data(), status: 401))
@@ -99,6 +179,18 @@ final class AutoScanTests: XCTestCase {
     for _ in 0..<20 { camera.onFrame?(paperImage().cgImage!) }
     XCTAssertEqual(camera.captures, 1)
     model.stop()
+  }
+  func testNoDetectedTextOutlineStillCompletesHandsFree() async throws {
+    let camera = FakeScanCamera(data: problemImage().jpegData(compressionQuality: 0.95)!)
+    var sample = goodSample(); sample.contentBounds = nil; sample.cue = .findProblem
+    let solver = FakePageSolver(page: solvedPage()), saver = FakeSolutionSaver()
+    let model = makeModel(camera, FakePageAnalyzer(sample: sample), solver, saver)
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await sendStableFrames(camera, model: model, count: 12)
+    await waitUntil { model.phase == .finished }
+    XCTAssertEqual(model.phase, .finished, model.guide)
+    XCTAssertEqual(camera.captures, 1); XCTAssertEqual(saver.saves, 1)
+    XCTAssertTrue(model.showPDF); model.stop()
   }
   func testBadStillIsRetakenWithoutSendingToAI() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
@@ -206,9 +298,9 @@ final class AutoScanTests: XCTestCase {
       keyProvider: { "test-key-never-sent" }, modelProvider: { "gpt-4.1" })
     model.voiceGuidance = false; return model
   }
-  private func sendStableFrames(_ camera: FakeScanCamera, model: AutoScanModel) async throws {
+  private func sendStableFrames(_ camera: FakeScanCamera, model: AutoScanModel, count: Int = 8) async throws {
     let image = paperImage().cgImage!
-    for _ in 0..<8 {
+    for _ in 0..<count {
       guard model.phase == .seeking else { break }
       camera.onFrame?(image)
       try await Task.sleep(for: .milliseconds(350))
@@ -220,6 +312,28 @@ final class AutoScanTests: XCTestCase {
   }
   private func solvedPage() -> SolvedPage {
     SolvedPage(readable: true, retakeReason: "", title: "Linear equation", problems: [SolvedProblem(problem: "2x + 3 = 11", steps: ["Subtract 3.", "Divide by 2."], answer: "x = 4", check: "2 × 4 + 3 = 11")])
+  }
+  /// A complete problem without a visible sheet outline; optionally surrounded by clutter.
+  private func problemImage(cluttered: Bool = false, offCenter: Bool = false) -> UIImage {
+    let format = UIGraphicsImageRendererFormat(); format.scale = 1
+    return UIGraphicsImageRenderer(size: CGSize(width: 720, height: 1280), format: format).image { renderer in
+      UIColor.white.setFill(); renderer.fill(CGRect(x: 0, y: 0, width: 720, height: 1280))
+      let context = renderer.cgContext
+      if cluttered {
+        for n in 0..<30 {
+          UIColor(hue: CGFloat(n % 7) / 7, saturation: 0.65, brightness: 0.6, alpha: 1).setFill()
+          renderer.fill(CGRect(x: CGFloat((n * 83) % 700), y: CGFloat((n * 157) % 1250), width: 110, height: 75))
+        }
+        context.translateBy(x: 360, y: 640); context.rotate(by: 0.19)
+        context.translateBy(x: -360, y: -640)
+        UIColor.white.setFill(); context.fill(CGRect(x: -150, y: 360, width: 1020, height: 520))
+      }
+      let origin = offCenter ? CGPoint(x: 70, y: 75) : CGPoint(x: 70, y: 470)
+      for (index, text) in ["Solve for x:", "2x + 3 = 11", "Show your steps."].enumerated() {
+        (text as NSString).draw(at: CGPoint(x: origin.x, y: origin.y + CGFloat(index) * 70),
+          withAttributes: [.font: UIFont.systemFont(ofSize: 38), .foregroundColor: UIColor.black])
+      }
+    }
   }
   private func paperImage(blank: Bool = false) -> UIImage {
     let format = UIGraphicsImageRendererFormat(); format.scale = 1

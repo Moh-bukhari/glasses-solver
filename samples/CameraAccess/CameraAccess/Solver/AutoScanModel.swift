@@ -8,7 +8,7 @@ import UIKit
 final class AutoScanModel {
   enum Phase: String { case idle, connecting, seeking, capturing, checking, solving, saving, finished, failed }
   private(set) var phase: Phase = .idle
-  private(set) var guide = "Point your glasses at a well-lit page."
+  private(set) var guide = "Point your glasses at the problem you want to solve."
   private(set) var progress = 0.0
   private(set) var preview: CGImage?
   private(set) var sample = PageSample()
@@ -33,8 +33,7 @@ final class AutoScanModel {
   @ObservationIgnored private var runID = UUID()
   @ObservationIgnored private var gate = StabilityGate()
   @ObservationIgnored private var lastFrameTime = -Double.infinity
-  @ObservationIgnored private var lastSpeechTime = -Double.infinity
-  @ObservationIgnored private var lastSpoken = ""
+  @ObservationIgnored private var speechGate = GuidanceSpeechGate()
   @ObservationIgnored private var aiRetakes = 0
   @ObservationIgnored private var pendingJPEG: Data?
   @ObservationIgnored private var previousIdleTimer: Bool?
@@ -73,8 +72,8 @@ final class AutoScanModel {
       do {
         try await camera.start()
         guard runID == id else { return }
-        phase = .seeking; guide = "Show the whole page. Keep its edges in view."
-        say("Auto scan is ready. Show the whole page.")
+        phase = .seeking; guide = "Point at the problem. The paper edges do not need to fit."
+        say("Ready. Look at the problem you want to solve.")
       } catch {
         guard runID == id else { return }; fail(error.localizedDescription)
       }
@@ -128,7 +127,7 @@ final class AutoScanModel {
 
   private func begin(imported: Bool, keepPhoto: Bool = false) {
     runID = UUID(); worker?.cancel(); analysisTask?.cancel(); analysisTask = nil
-    camera.stop(); gate.reset(); isImported = imported
+    camera.stop(); gate.reset(); speechGate.reset(); isImported = imported
     result = nil; showPDF = false; progress = 0; attempts = 0; aiRetakes = 0
     sample = PageSample(); preview = nil; lastFrameTime = -Double.infinity
     if !keepPhoto { pendingJPEG = nil; capturedPreview = nil }
@@ -153,13 +152,16 @@ final class AutoScanModel {
         sample = value
         progress = gate.observe(value, at: time)
         if !value.acceptable {
-          guide = value.issue ?? "Show the whole page."; say(guide)
+          guide = value.issue ?? ScanCue.findProblem.message
+          speakCue(value.cue, at: time)
         } else if progress < 1 {
-          guide = progress > 0 ? "Hold steady… \(Int(progress * 100))%" : "Page found. Hold still."
-          if progress == 0 { say("Page found. Hold still.") }
+          // Offer directions first. A steady, detailed view can proceed even if framing is imperfect.
+          let cue: ScanCue = progress >= 0.5 ? .hold : value.cue
+          guide = cue == .hold ? "Hold still… \(Int(progress * 100))%" : cue.message
+          speakCue(cue, at: time)
         } else {
-          phase = .capturing; guide = "Capturing the page. Keep still…"; progress = 0
-          say("Capturing. Keep still.", force: true)
+          phase = .capturing; guide = "Taking a photo. Keep still…"; progress = 0
+          say("Capturing. Keep still.")
           worker = Task { [weak self] in
             guard let self else { return }
             do {
@@ -194,14 +196,14 @@ final class AutoScanModel {
   }
 
   private func solve(_ jpeg: Data, id: UUID) async throws {
-    phase = .solving; guide = "AI is reading and solving the page…"; progress = 0
-    say("Photo captured. Solving your page.", force: true)
+    phase = .solving; guide = "AI is reading and solving the photographed problem…"; progress = 0
+    say("Photo received. Checking and solving your problem.")
     let page = try await solver.solve(jpeg: jpeg, key: settingsKey, model: settingsModel)
     try Task.checkCancellation()
     guard runID == id else { return }
     if !page.readable {
       aiRetakes += 1; pendingJPEG = nil
-      guard aiRetakes <= 1 else { throw SolverError.message("AI still cannot read the page. \(page.retakeReason)") }
+      guard aiRetakes <= 1 else { throw SolverError.message("AI still cannot read the problem. \(page.retakeReason)") }
       try await retake(page.retakeReason.isEmpty ? "The AI needs a clearer view of the writing." : page.retakeReason, id: id)
       return
     }
@@ -212,13 +214,13 @@ final class AutoScanModel {
     result = saved; pendingJPEG = nil
     camera.stop(); gate.reset(); restoreIdleTimer()
     phase = .finished; guide = "Your solution PDF is ready."; showPDF = true
-    say("Your solution PDF is ready on your phone.", force: true)
+    say("Your solution PDF is ready on your phone.")
   }
 
   private func retake(_ reason: String, id: UUID) async throws {
     guard !isImported else { throw SolverError.message(reason + " Choose a clearer photo.") }
     guard attempts < 3 else { throw SolverError.message("Three captures were not clear enough. " + reason) }
-    guide = reason; say(reason, force: true)
+    guide = reason; say(reason)
     try await Task.sleep(for: .seconds(2))
     try Task.checkCancellation()
     guard runID == id else { return }
@@ -235,19 +237,25 @@ final class AutoScanModel {
     runID = UUID(); worker?.cancel(); analysisTask?.cancel(); analysisTask = nil
     camera.stop(); gate.reset(); restoreIdleTimer()
     phase = .failed; guide = message; progress = 0
-    say("Scan stopped. " + message, force: true)
+    say("Scan stopped. " + message)
   }
   private func restoreIdleTimer() {
     if let previousIdleTimer { UIApplication.shared.isIdleTimerDisabled = previousIdleTimer }
     previousIdleTimer = nil
   }
-  private func say(_ message: String, force: Bool = false) {
+  private func speakCue(_ cue: ScanCue, at time: TimeInterval) {
+    guard voiceGuidance, speechGate.shouldSpeak(cue, at: time) else { return }
+    speak(cue.message)
+  }
+  private func say(_ message: String) {
     guard voiceGuidance else { return }
-    let now = ProcessInfo.processInfo.systemUptime
-    guard force || (now - lastSpeechTime > 7 && message != lastSpoken) else { return }
+    speechGate.noteAnnouncement(at: ProcessInfo.processInfo.systemUptime)
+    speak(message)
+  }
+  private func speak(_ message: String) {
     if speech.isSpeaking { speech.stopSpeaking(at: .word) }
     let utterance = AVSpeechUtterance(string: message)
     utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.95
-    speech.speak(utterance); lastSpoken = message; lastSpeechTime = now
+    speech.speak(utterance)
   }
 }

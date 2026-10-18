@@ -18,9 +18,9 @@ struct AutoScanView: View {
     NavigationStack {
       ScrollView {
         VStack(alignment: .leading, spacing: 18) {
-          Text("A clear page. A worked solution.")
+          Text("See the problem. Get the solution.")
             .font(.title2.bold())
-          Text(importOnly ? "Choose a photo to check, solve, and open as a PDF." : "Start once. Hold the page in view. Your PDF opens automatically.")
+          Text(importOnly ? "Choose a photo to check, solve, and open as a PDF." : "Start once. Look at the problem and follow the voice cues. Your PDF opens automatically.")
             .foregroundStyle(.secondary)
           viewfinder
           HStack(spacing: 10) {
@@ -64,7 +64,7 @@ struct AutoScanView: View {
           if !importOnly {
             Toggle("Spoken positioning cues", isOn: $voiceGuidance)
               .onChange(of: voiceGuidance) { _, value in model.voiceGuidance = value }
-            Text("Keep this app open and the phone unlocked. It stays awake during a scan. One page is solved per start; scanning stops when the PDF opens.")
+            Text("Keep this app open and the phone unlocked. It stays awake during a scan. One photo is solved per start; scanning stops when the PDF opens.")
               .font(.footnote).foregroundStyle(.secondary)
           }
         }.padding(20)
@@ -79,6 +79,8 @@ struct AutoScanView: View {
       }
       .task(id: selection) {
         guard let selection else { return }
+        defer { self.selection = nil }
+        importError = nil
         do {
           guard let data = try await selection.loadTransferable(type: Data.self) else { throw SolverError.message("Could not import this photo.") }
           try Task.checkCancellation()
@@ -114,14 +116,14 @@ struct AutoScanView: View {
         Color.black
         if let preview = model.preview, model.phase == .seeking || model.phase == .capturing {
           Image(decorative: preview, scale: 1).resizable().scaledToFit()
-          PageOutline(points: model.sample.corners, imageSize: CGSize(width: preview.width, height: preview.height))
+          ContentOutline(points: model.sample.corners, imageSize: CGSize(width: preview.width, height: preview.height))
             .stroke(model.sample.acceptable ? Color.mint : Color.orange, lineWidth: 3)
         } else if let image = model.capturedPreview {
           Image(uiImage: image).resizable().scaledToFit()
         } else {
           VStack(spacing: 12) {
             Image(systemName: "doc.viewfinder").font(.system(size: 56, weight: .light))
-            Text("Whole page • Good light • Hold still").font(.caption)
+            Text("Readable writing • Good light • Hold still").font(.caption)
           }.foregroundStyle(.white.opacity(0.75))
         }
         if model.phase == .capturing || model.phase == .checking {
@@ -133,7 +135,7 @@ struct AutoScanView: View {
   }
 }
 
-private struct PageOutline: Shape {
+private struct ContentOutline: Shape {
   let points: [PagePoint]
   let imageSize: CGSize
   func path(in rect: CGRect) -> Path {

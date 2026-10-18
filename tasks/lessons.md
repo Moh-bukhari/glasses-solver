@@ -9,3 +9,6 @@
 
 Meta's SDK resolves a keychain access group during initialization. Simulator tests must use ad-hoc signing (`CODE_SIGN_IDENTITY="-"`), not `CODE_SIGNING_ALLOWED=NO`. The unsigned device IPA remains appropriate for later signing by iloader. See Meta's diagnosis in facebook/meta-wearables-dat-ios#197.
 
+
+- A readable problem photo does not need a detected paper rectangle. Never make clean background, all four page corners or a straight-on sheet prerequisites for this workflow. Use preview hints to obtain a still; let AI assess the actual problem.
+- Positioning cues must specify the wearer’s camera direction. Debounce changes, say “hold” promptly, and allow reminders; an announcement cooldown must not suppress the first useful direction.

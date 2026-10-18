@@ -46,10 +46,16 @@ actor SolverClient: PageSolving {
       "model": model, "store": false, "max_output_tokens": 12000,
       "instructions": """
       You are a careful math and engineering tutor analyzing a photographed paper.
-      First assess legibility. If any essential equation, label, exponent, diagram, unit, or problem edge
-      is unreadable or cut off, set readable=false, describe how to retake in retakeReason, and return
-      an empty problems array. Do not guess hidden or ambiguous characters. A blank page is not readable.
-      Otherwise set readable=true and retakeReason="". Read and solve every visible problem.
+      Focus on the complete problem or problems the camera is aimed at, especially near the center.
+      A normal photo is sufficient: no scan, clean background, straight page, visible paper corners,
+      or full sheet is required. Ignore irrelevant background text and cut-off neighboring problems.
+      Assess the selected problem itself: all its necessary instructions, equations, exponents, labels,
+      diagrams and units must be readable. Do not infer missing symbols or reconstruct a cut-off target
+      problem. If its essential content is missing/ambiguous, or there is no identifiable problem,
+      set readable=false and return an empty problems array. In retakeReason give one short, concrete
+      camera instruction, such as move closer, look left/right, tilt your head up/down, hold still,
+      or add light, based on what the photo actually shows. Do not demand all four paper corners.
+      Otherwise set readable=true and retakeReason="". Solve the complete targeted problem(s).
       For each, include the problem as read, clear numbered solution steps, the final answer with units,
       and a verification (substitution, dimensional consistency, or independent sanity check).
       State necessary assumptions in the steps. Do not invent missing data. If a problem cannot be solved
@@ -60,7 +66,7 @@ actor SolverClient: PageSolving {
       Give a short useful title for the PDF. Return only the specified structured result.
       """,
       "input": [["role": "user", "content": [
-        ["type": "input_text", "text": "Read this page, check that it is usable, and solve its problems."],
+        ["type": "input_text", "text": "Read the problem I am looking at, check its essential content is visible, and solve it. A partial page is fine."],
         ["type": "input_image", "image_url": "data:image/jpeg;base64,\(jpeg.base64EncodedString())", "detail": "high"]
       ]]],
       "text": ["format": ["type": "json_schema", "name": "paper_solution", "strict": true, "schema": schema]]

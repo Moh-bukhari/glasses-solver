@@ -10,14 +10,106 @@ struct PagePoint: Sendable, Equatable {
   func distance(to other: Self) -> Double { hypot(x - other.x, y - other.y) }
 }
 
+/// Directions refer to the wearer's head/camera, never to moving the paper.
+enum ScanCue: String, Sendable {
+  case findProblem, left, right, tiltUp, tiltDown, closer, farther, moreLight, steady, hold
+
+  var message: String {
+    switch self {
+    case .findProblem: return "Point at the problem. Keep the writing in view."
+    case .left: return "Look a little left."
+    case .right: return "Look a little right."
+    case .tiltUp: return "Tilt your head up a little."
+    case .tiltDown: return "Tilt your head down a little."
+    case .closer: return "Move a little closer to the writing."
+    case .farther: return "Move back a little to fit the problem."
+    case .moreLight: return "More light on the writing, please."
+    case .steady: return "Hold your head still. The image looks blurred."
+    case .hold: return "Hold still for the photo."
+    }
+  }
+}
+
 struct PageSample: Sendable {
-  var corners: [PagePoint] = [] // TL, TR, BR, BL; Vision normalized coordinates
+  var contentBounds: CGRect? = nil // Text region, not paper edges; Vision bottom-left coordinates.
   var luminance: Double = 0
   var contrast: Double = 0
   var sharpness: Double = 0
   var fingerprint: [Double] = []
+  var cue: ScanCue = .hold
   var issue: String? = nil
-  var acceptable: Bool { issue == nil && corners.count == 4 }
+  var acceptable: Bool { issue == nil && !fingerprint.isEmpty }
+  var corners: [PagePoint] {
+    guard let b = contentBounds else { return [] }
+    return [PagePoint(x: b.minX, y: b.maxY), PagePoint(x: b.maxX, y: b.maxY),
+      PagePoint(x: b.maxX, y: b.minY), PagePoint(x: b.minX, y: b.minY)]
+  }
+}
+
+/// Framing is advice. It never rejects a still or requires a sheet outline.
+struct ContentFraming {
+  static func cue(bounds: CGRect?, lineHeight: Double, imageHeight: Int) -> ScanCue {
+    guard let b = bounds else { return .findProblem }
+    let dx = Double(b.midX) - 0.5, dy = Double(b.midY) - 0.5
+    // Broad central zone: no need to perfectly center a readable problem.
+    if abs(dx) > 0.27 || abs(dy) > 0.30 {
+      if abs(dx) / 0.27 >= abs(dy) / 0.30 { return dx < 0 ? .left : .right }
+      return dy > 0 ? .tiltUp : .tiltDown
+    }
+    if b.width > 0.97 || b.height > 0.97 { return .farther }
+    if (lineHeight > 0 && lineHeight * Double(imageHeight) < 8)
+      || (b.width < 0.18 && b.height < 0.14) { return .closer }
+    return .hold
+  }
+
+  /// Follow the text group nearest the center; distant background labels need not fit.
+  static func primaryGroup(_ boxes: [CGRect]) -> [CGRect] {
+    var remaining = Array(boxes.filter { $0.width > 0.008 && $0.height > 0.003 }.prefix(200))
+    guard let seed = remaining.indices.min(by: { distance(remaining[$0]) < distance(remaining[$1]) }) else { return [] }
+    var group = [remaining.remove(at: seed)]
+    var expanded = true
+    while expanded {
+      expanded = false
+      for index in remaining.indices.reversed() {
+        let box = remaining[index]
+        if group.contains(where: { neighbor($0, box) }) {
+          group.append(remaining.remove(at: index)); expanded = true
+        }
+      }
+    }
+    return group
+  }
+  private static func distance(_ b: CGRect) -> Double {
+    let dx = max(max(b.minX - 0.5, 0.5 - b.maxX), 0)
+    let dy = max(max(b.minY - 0.5, 0.5 - b.maxY), 0)
+    return hypot(dx, dy)
+  }
+  private static func neighbor(_ a: CGRect, _ b: CGRect) -> Bool {
+    let xGap = max(max(a.minX - b.maxX, b.minX - a.maxX), 0)
+    let yGap = max(max(a.minY - b.maxY, b.minY - a.maxY), 0)
+    // Same line, or nearby lines with overlapping horizontal spans.
+    return (yGap == 0 && xGap < 0.08) || (xGap == 0 && yGap < 0.09)
+  }
+}
+
+/// Debounce changing directions, interrupt them promptly with "hold", and repeat useful reminders.
+struct GuidanceSpeechGate {
+  private var candidate: ScanCue?
+  private var candidateSince = -Double.infinity
+  private var lastCue: ScanCue?
+  private var lastTime = -Double.infinity
+
+  mutating func reset() { self = Self() }
+  mutating func noteAnnouncement(at time: TimeInterval) {
+    candidate = nil; lastCue = nil; lastTime = time
+  }
+  mutating func shouldSpeak(_ cue: ScanCue, at time: TimeInterval) -> Bool {
+    if candidate != cue { candidate = cue; candidateSince = time }
+    if cue != .hold && time - candidateSince < 0.3 { return false }
+    let interval = cue == lastCue ? 7.0 : (cue == .hold || lastCue == nil ? 0.8 : 2.2)
+    guard time - lastTime >= interval else { return false }
+    lastCue = cue; lastTime = time; return true
+  }
 }
 
 struct StabilityGate: Sendable {
@@ -35,22 +127,25 @@ struct StabilityGate: Sendable {
   mutating func observe(_ sample: PageSample, at time: TimeInterval) -> Double {
     guard !latched else { return 1 }
     guard sample.acceptable else { reset(); return 0 }
-    let gap = lastTime.map { time - $0 > 0.85 || time <= $0 } ?? false
-    let moved = previous.map { Self.movement($0, sample) > 0.012 } ?? false
-    let drifted = anchor.map { Self.movement($0, sample) > 0.022 } ?? false
-    let changed = previous.map { Self.imageDifference($0, sample) > 0.055 } ?? false
-    if since == nil || gap || moved || drifted || changed {
+    let gap = lastTime.map { time - $0 > 1.1 || time <= $0 } ?? false
+    let moved = previous.map { Self.movement($0, sample) > 0.045 || Self.imageDifference($0, sample) > 0.10 } ?? false
+    let drifted = anchor.map { Self.movement($0, sample) > 0.065 || Self.imageDifference($0, sample) > 0.14 } ?? false
+    if since == nil || gap || moved || drifted {
       anchor = sample; since = time; samples = 0
     }
     previous = sample; lastTime = time; samples += 1
-    let progress = min(1, (time - (since ?? time)) / duration)
+    // Give positioning advice time to help, but don't wait forever for ideal framing or text detection.
+    let holdTime = sample.cue == .hold ? duration : max(duration, 3)
+    let progress = min(1, (time - (since ?? time)) / holdTime)
     if progress >= 1 && samples >= 5 { latched = true; return 1 }
     return min(progress, 0.98)
   }
 
   static func movement(_ a: PageSample, _ b: PageSample) -> Double {
-    guard a.corners.count == 4, b.corners.count == 4 else { return 1 }
-    return zip(a.corners, b.corners).map { $0.distance(to: $1) }.max() ?? 1
+    guard let p = a.contentBounds, let q = b.contentBounds else { return 0 }
+    // A detector dropping a line must not masquerade as head motion; fixed-frame pixels still check it.
+    guard abs(p.width - q.width) < 0.12, abs(p.height - q.height) < 0.12 else { return 0 }
+    return hypot(p.midX - q.midX, p.midY - q.midY)
   }
   static func imageDifference(_ a: PageSample, _ b: PageSample) -> Double {
     guard !a.fingerprint.isEmpty, a.fingerprint.count == b.fingerprint.count else { return 1 }
@@ -72,48 +167,38 @@ struct PreparedPhoto: Sendable {
 
 actor PageAnalyzer: PageAnalyzing {
   func analyze(_ image: CGImage, still: Bool = false) throws -> PageSample {
-    let request = VNDetectRectanglesRequest()
-    request.minimumConfidence = 0.7
-    request.maximumObservations = 5
-    request.minimumAspectRatio = 0.30
-    request.maximumAspectRatio = 1.0
-    request.minimumSize = 0.25
-    request.quadratureTolerance = 25
-    try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
-    guard let page = request.results?.max(by: { $0.boundingBox.width * $0.boundingBox.height < $1.boundingBox.width * $1.boundingBox.height }) else {
-      return PageSample(issue: "Show the whole page against a contrasting background.")
-    }
-    let points = [page.topLeft, page.topRight, page.bottomRight, page.bottomLeft]
-    var sample = PageSample(corners: points.map { PagePoint(x: $0.x, y: $0.y) })
-    let box = page.boundingBox
-    if points.contains(where: { $0.x < 0.025 || $0.x > 0.975 || $0.y < 0.025 || $0.y > 0.975 }) {
-      sample.issue = "Move back slightly so all four page corners are visible."; return sample
-    }
-    if box.width * box.height < 0.22 {
-      sample.issue = "Move closer. Let the page fill more of the view."; return sample
-    }
-    let pixels = points.map { CGPoint(x: $0.x * Double(image.width), y: $0.y * Double(image.height)) }
-    for i in 0..<4 {
-      let p = pixels[i], a = pixels[(i + 3) % 4], b = pixels[(i + 1) % 4]
-      let ax = a.x - p.x, ay = a.y - p.y, bx = b.x - p.x, by = b.y - p.y
-      let cosine = (ax * bx + ay * by) / max(1, hypot(ax, ay) * hypot(bx, by))
-      if abs(cosine) > 0.34 {
-        sample.issue = "Face the page more directly. Reduce the angle."; return sample
-      }
-    }
-    // Analyze the interior only: page borders must not make blurry text look sharp.
-    let inner = box.insetBy(dx: box.width * 0.09, dy: box.height * 0.09)
-    let region = CGRect(x: inner.minX * Double(image.width), y: (1 - inner.maxY) * Double(image.height),
-      width: inner.width * Double(image.width), height: inner.height * Double(image.height)).integral
-    guard let crop = image.cropping(to: region) else { throw SolverError.message("Could not inspect the paper photo.") }
+    // Locate visible text only; no character recognition/transcription and no paper detector.
+    // If text detection misses handwriting or a diagram, a steady detailed image can still proceed.
+    let request = VNDetectTextRectanglesRequest()
+    request.reportCharacterBoxes = false
+    try? VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
+    let group = ContentFraming.primaryGroup((request.results ?? []).map(\.boundingBox))
+    let bounds = group.isEmpty ? nil : group.reduce(CGRect.null) { $0.union($1) }
+    let heights = group.map { Double($0.height) }.sorted()
+    let lineHeight = heights.isEmpty ? 0 : heights[heights.count / 2]
+    // Inspect writing when localized. Otherwise inspect the center, excluding distant background edges.
+    let unit = CGRect(x: 0, y: 0, width: 1, height: 1)
+    let inspection = bounds.map { $0.insetBy(dx: -0.025, dy: -0.025).intersection(unit) }
+      ?? CGRect(x: 0.15, y: 0.15, width: 0.7, height: 0.7)
+    let region = CGRect(x: inspection.minX * Double(image.width), y: (1 - inspection.maxY) * Double(image.height),
+      width: inspection.width * Double(image.width), height: inspection.height * Double(image.height)).integral
+    guard let crop = image.cropping(to: region) else { throw SolverError.message("Could not inspect this photo.") }
     let metrics = Self.measure(crop)
-    sample.luminance = metrics.mean; sample.contrast = metrics.contrast
-    sample.sharpness = metrics.sharpness; sample.fingerprint = metrics.fingerprint
-    if metrics.mean < 0.20 { sample.issue = "Add more light to the page." }
-    else if metrics.mean > 0.96 && metrics.contrast < 0.06 { sample.issue = "Tilt away from glare or reduce the light." }
-    else if metrics.contrast < 0.045 { sample.issue = "The page detail is faint. Improve the light and move closer." }
-    else if metrics.sharpness < (still ? 0.00055 : 0.00030) { sample.issue = "Hold still. The writing looks blurred." }
-    else if still && min(image.width, image.height) < 800 { sample.issue = "The capture is too small for reliable page reading." }
+    // A fixed full-frame fingerprint avoids false motion when detected text bounds change.
+    let motion = Self.measure(image, longestSide: 192)
+    var sample = PageSample(contentBounds: bounds, luminance: metrics.mean, contrast: metrics.contrast,
+      sharpness: metrics.sharpness, fingerprint: motion.fingerprint,
+      cue: ContentFraming.cue(bounds: bounds, lineHeight: lineHeight, imageHeight: image.height))
+    // Only obvious darkness, missing detail, or heavy blur can veto a capture. Geometry cannot.
+    if metrics.mean < 0.07 {
+      sample.cue = .moreLight; sample.issue = sample.cue.message
+    } else if metrics.contrast < 0.018 {
+      sample.cue = .findProblem; sample.issue = "Point at the writing. I can't see enough detail yet."
+    } else if metrics.sharpness < 0.00012 {
+      sample.cue = .steady; sample.issue = sample.cue.message
+    }
+    // No minimum paper size, perspective limit, border requirement, or 800-pixel cutoff.
+    // The full still, not the preview, is what the AI assesses for complete readable problems.
     return sample
   }
 
@@ -122,7 +207,9 @@ actor PageAnalyzer: PageAnalyzing {
       let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
       let width = properties[kCGImagePropertyPixelWidth] as? Int,
       let height = properties[kCGImagePropertyPixelHeight] as? Int,
-      width * height <= 60_000_000 else { throw SolverError.message("Could not decode this photo, or it exceeds 60 megapixels.") }
+      width > 0, height > 0, width * height <= 60_000_000 else {
+      throw SolverError.message("Could not decode this photo, or it exceeds 60 megapixels.")
+    }
     let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
       kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: max(width, height)]
     guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
@@ -142,8 +229,9 @@ actor PageAnalyzer: PageAnalyzing {
   }
 
   struct Metrics { let mean: Double; let contrast: Double; let sharpness: Double; let fingerprint: [Double] }
-  static func measure(_ image: CGImage) -> Metrics {
-    let w = 384, h = max(32, Int(Double(w) * Double(image.height) / Double(image.width)))
+  static func measure(_ image: CGImage, longestSide: Int = 640) -> Metrics {
+    let scale = min(1, Double(longestSide) / Double(max(image.width, image.height)))
+    let w = max(32, Int(Double(image.width) * scale)), h = max(32, Int(Double(image.height) * scale))
     var bytes = [UInt8](repeating: 0, count: w * h)
     let drawn = bytes.withUnsafeMutableBytes { buffer -> Bool in
       guard let context = CGContext(data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8,
@@ -162,10 +250,10 @@ actor PageAnalyzer: PageAnalyzing {
       energy += lap * lap
     } }
     var fingerprint: [Double] = []
-    for gy in 0..<16 { for gx in 0..<16 {
+    for gy in 0..<32 { for gx in 0..<32 {
       var sum = 0.0, count = 0.0
-      for y in (gy * h / 16)..<((gy + 1) * h / 16) {
-        for x in (gx * w / 16)..<((gx + 1) * w / 16) { sum += values[y * w + x]; count += 1 }
+      for y in (gy * h / 32)..<((gy + 1) * h / 32) {
+        for x in (gx * w / 32)..<((gx + 1) * w / 32) { sum += values[y * w + x]; count += 1 }
       }
       fingerprint.append(sum / max(1, count) - mean)
     } }

@@ -1,6 +1,6 @@
 # Glasses Solver
 
-Personal iPhone app: **Start Auto Scan → hold a clear page → automatic capture → AI solution → PDF opens**.
+Personal iPhone app (1.2): **Start Auto Scan → look at a problem → automatic capture → AI solution → PDF opens**.
 
 See [installation and usage](SOLVER-SETUP.md). Download the IPA from the latest successful [cloud build on solver-app](https://github.com/Moh-bukhari/glasses-solver/actions/workflows/build-solver.yml). The code is developed on the `solver-app` branch (PR #1).
 
