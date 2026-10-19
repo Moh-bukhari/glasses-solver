@@ -738,6 +738,27 @@ final class AutoScanTests: XCTestCase {
     let calls = await solver.calls; XCTAssertEqual(calls, 2)
     model.stop()
   }
+  func testTheSameSheetSeenAgainAfterSavingIsNotTheNextPage() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: frameSample()), voice = FakeScanVoice()
+    let model = makeModel(camera, analyzer, FakePageSolver(), FakeSolutionSaver(), capture: .frames, voice: voice)
+    await analyzer.setText(text(viewA))
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await sendFrames(camera, model: model, seconds: 1.5)
+    model.handle(.next); await waitUntil { model.phase == .awaitingNext && model.pages.count == 1 }
+    await analyzer.setContent(0.6) // the whole sheet from farther away: a different image, the same writing
+    for _ in 0..<20 where model.phase == .awaitingNext {
+      camera.onFrame?(paperImage().cgImage!); try await Task.sleep(for: .milliseconds(350))
+    }
+    try await sendFrames(camera, model: model, seconds: 2)
+    XCTAssertTrue(voice.messages.contains { $0.hasPrefix("Still page 1.") }, "\(voice.messages)")
+    XCTAssertEqual(model.pages.count, 1)
+    await analyzer.setContent(0.9); await analyzer.setText(text(viewB)) // now the next sheet
+    try await sendFrames(camera, model: model, seconds: 1.5)
+    model.handle(.next); await waitUntil { model.pages.count == 2 }
+    XCTAssertEqual(model.pages.count, 2, "New writing is the next page.")
+    model.stop()
+  }
   func testThumbsUpBeforeAnyFrameIsKeptDoesNotFinish() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
     var far = frameSample(); far.linePixels = 12 // readable outline but too small for the AI

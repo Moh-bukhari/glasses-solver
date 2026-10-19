@@ -305,6 +305,12 @@ actor PageAnalyzer: PageAnalyzing {
       thumbnail: try? decode(360))
   }
 
+  /// A small orientation-corrected preview decoded from saved JPEG bytes.
+  static func thumbnail(_ jpeg: Data, maxPixel: Int = 360) -> CGImage? {
+    guard let source = CGImageSourceCreateWithData(jpeg as CFData, nil) else { return nil }
+    return CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
+      kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: maxPixel] as CFDictionary)
+  }
   static func encodeJPEG(_ image: CGImage, quality: Double) throws -> Data {
     let output = NSMutableData()
     guard let destination = CGImageDestinationCreateWithData(output, UTType.jpeg.identifier as CFString, 1, nil) else {

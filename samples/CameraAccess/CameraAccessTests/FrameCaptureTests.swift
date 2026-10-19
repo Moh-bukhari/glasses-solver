@@ -67,6 +67,25 @@ final class FrameCaptureTests: XCTestCase {
     XCTAssertTrue(frames.labels.isSuperset(of: [1, 2, 3, 4]))
   }
 
+  func testACloserFrameNeverDropsTheTextOfTheViewItWouldReplace() {
+    var frames = PageFrames()
+    let full = text(["1. Solve the system of equations", "2. Find the slope of the line", "through the points one two and three",
+      "A) three  B) four  C) five  D) six", "Show all of your work clearly"])
+    let closer = text(["1. Solve the system of equations", "2. Find the slope of the line", "Show all of your work clearly"])
+    XCTAssertEqual(frames.offer(sample(sharpness: 0.002), text: full, id: 1, at: 0), .added(1))
+    XCTAssertEqual(frames.offer(sample(sharpness: 0.05), text: closer, id: 2, at: 1), .duplicate,
+      "Sharper, but it cuts off question 2's data and choices.")
+    XCTAssertEqual(frames.frameIDs, [1])
+  }
+  func testAReplacedViewKeepsItsPlaceInThePage() {
+    var frames = PageFrames()
+    let top = text(["1. Solve for x in 2x + 3 = 11", "2. Find the slope of the line", "Show all of your work clearly"])
+    let bottom = text(["3. Factor x squared minus nine", "4. Graph y equals two x plus one", "Use the grid provided below"])
+    _ = frames.offer(sample(sharpness: 0.002), text: top, id: 1, at: 0)
+    _ = frames.offer(sample(content: 0.4), text: bottom, id: 2, at: 1)
+    XCTAssertEqual(frames.offer(sample(sharpness: 0.05), text: top, id: 3, at: 2), .replaced(old: 1, new: 3))
+    XCTAssertEqual(frames.frameIDs, [3, 2], "The sharper top view stays first: reading order, thumbnail and neighbor context.")
+  }
   func testWithoutReadableLinesViewsAreToldApartByImage() {
     var frames = PageFrames()
     XCTAssertEqual(frames.offer(sample(content: 0.05), text: FrameText(), id: 1, at: 0), .added(1))

@@ -83,9 +83,11 @@ struct FrameText: Sendable, Equatable {
   var lines: [ReadLine] = []
   /// Question numbers at the start of lines, top to bottom.
   var labels: [Int] { QuestionLabels.numbers(in: lines.sorted { $0.box.maxY > $1.box.maxY }.map(\.text)) }
-  /// Lines long enough to identify a view of the page: lowercase letters and digits only.
-  var signature: Set<String> {
-    Set(lines.map { $0.text.lowercased().filter { $0.isLetter || $0.isNumber } }.filter { $0.count >= 6 })
+  /// Words long enough to identify a view of the page (lowercase letters and digits). Words, not whole lines, so a line
+  /// cut off at the frame edge and read slightly differently from frame to frame still matches.
+  var signature: Set<String> { Self.words(lines.map(\.text)) }
+  static func words(_ texts: [String]) -> Set<String> {
+    Set(texts.flatMap { $0.lowercased().split { !$0.isLetter && !$0.isNumber } }.map(String.init).filter { $0.count >= 4 })
   }
   var meanConfidence: Double { lines.isEmpty ? 0 : lines.map(\.confidence).reduce(0, +) / Double(lines.count) }
 }
@@ -101,11 +103,11 @@ struct PageFrames: Sendable {
     /// Consecutive analyzed frames with little image change before a frame may be kept.
     var steadyFrames = 3
     var steadyDifference = 0.08
-    /// Share of a new frame's lines already in a kept frame for both to count as the same view.
+    /// Share of a new frame's words already in a kept frame for both to count as the same view.
     var sameView = 0.6
-    /// Without enough readable lines, views are compared by image fingerprint instead.
+    /// Without enough readable words, views are compared by image fingerprint instead.
     var sameViewImage = 0.12
-    var minLinesToCompare = 3
+    var minWordsToCompare = 5
     /// A same-view frame replaces the kept one only when clearly better.
     var betterBy = 0.10
     var maxFrames = 6
@@ -166,13 +168,18 @@ struct PageFrames: Sendable {
     let newLabels = labels.subtracting(self.labels)
     let sameViews = kept.indices.filter { isSameView(kept[$0], candidate) }
     if let index = sameViews.max(by: { closeness(kept[$0], candidate) < closeness(kept[$1], candidate) }) {
-      // Same view: keep the clearer frame, but never lose a question number only the old frame shows.
+      // Same view: keep the clearer frame, but never lose a question number or most of the text only the old frame shows
+      // (a closer, sharper frame may cut off a question's data). The page keeps its capture order.
       let old = kept[index]
-      guard quality >= old.quality + configuration.betterBy, old.labels.subtracting(labels).isEmpty else {
+      let keepsText = old.signature.isEmpty
+        || Double(old.signature.intersection(signature).count) >= 0.9 * Double(old.signature.count)
+      guard quality >= old.quality + configuration.betterBy, old.labels.subtracting(labels).isEmpty, keepsText else {
         if newLabels.isEmpty { return .duplicate }
         return append(candidate, at: time)
       }
-      kept[index] = candidate
+      var replacement = candidate
+      replacement.time = old.time
+      kept[index] = replacement
       if !newLabels.isEmpty { lastNew = time }
       return .replaced(old: old.id, new: id)
     }
@@ -189,6 +196,12 @@ struct PageFrames: Sendable {
 
   /// Frames in the order they were first taken.
   var frameIDs: [Int] { kept.sorted { $0.time < $1.time }.map(\.id) }
+  /// Every word read on this page, to recognize the same sheet after it was saved.
+  var words: Set<String> { kept.reduce(into: Set<String>()) { $0.formUnion($1.signature) } }
+  /// Share of `words` already in `known`: how much of a view was seen before.
+  static func overlap(_ words: Set<String>, with known: Set<String>) -> Double {
+    words.isEmpty ? 0 : Double(words.intersection(known).count) / Double(words.count)
+  }
 
   private mutating func append(_ candidate: Kept, at time: TimeInterval) -> Decision {
     guard kept.count < configuration.maxFrames else { return .full }
@@ -201,15 +214,15 @@ struct PageFrames: Sendable {
     return !a.fingerprint.isEmpty && a.fingerprint.count == b.fingerprint.count
       && Self.difference(a.fingerprint, b.fingerprint) <= configuration.sameViewImage
   }
-  /// Enough readable lines on both frames to compare views by text rather than by image.
+  /// Enough readable words on both frames to compare views by text rather than by image.
   private func comparesText(_ a: Kept, _ b: Kept) -> Bool {
-    min(a.signature.count, b.signature.count) >= configuration.minLinesToCompare
+    min(a.signature.count, b.signature.count) >= configuration.minWordsToCompare
   }
   /// Higher is more alike, on the same measure `isSameView` used.
   private func closeness(_ a: Kept, _ b: Kept) -> Double {
     comparesText(a, b) ? similarity(a, b) : 1 - Self.difference(a.fingerprint, b.fingerprint)
   }
-  /// Share of the candidate's lines already in `a`.
+  /// Share of the candidate's words already in `a`.
   private func similarity(_ a: Kept, _ b: Kept) -> Double {
     guard !b.signature.isEmpty else { return 0 }
     return Double(a.signature.intersection(b.signature).count) / Double(b.signature.count)

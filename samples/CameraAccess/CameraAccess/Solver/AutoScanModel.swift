@@ -115,6 +115,9 @@ final class AutoScanModel {
   @ObservationIgnored private var reading = false
   /// Bumped whenever the open page is saved or dropped, so a text read that finishes late never lands on another page.
   @ObservationIgnored private var pageGeneration = 0
+  /// Words of the page saved last: a view of the same sheet must not start the next page (it would duplicate questions).
+  @ObservationIgnored private var savedPageWords: Set<String> = []
+  @ObservationIgnored private var stillSpoken = false
   @ObservationIgnored private var questions = QuestionProgress()
   @ObservationIgnored private var missingSpoken: Set<Int> = []
   /// Text is read on a steady frame at most this often (accurate recognition takes ~120-250 ms).
@@ -206,11 +209,12 @@ final class AutoScanModel {
     worker = Task { [weak self] in await self?.process(data: data, id: id) }
   }
 
-  func nextPage() {
+  func nextPage(fromTurn: Bool = false) {
     guard phase == .awaitingNext else { return }
     guard pages.count < Self.maxPages else { guide = "Page limit reached. Give a thumbs-up to finish."; say(guide); return }
     gate.reset(); turnGate.reset(); progress = 0; attempts = 0; forceCapture = false; phase = .seeking
     replacing = nil; holdForNext = false; armAfterTurn = false; noteActivity(); discardOpenPage()
+    if !fromTurn { savedPageWords = [] } // 👉: the wearer says this is a new page, even if it looks alike
     // Adding pages after Finish (from a hands-free retry): the newest page waits for its successor again.
     if planFinal { planFinal = false; syncJobs() }
     guide = "Page \(pages.count + 1): hold it close and steady."; say("Page \(pages.count + 1).")
@@ -345,7 +349,7 @@ final class AutoScanModel {
     gate.reset(); turnGate.reset(); speechGate.reset(); gestureGate.reset()
     self.imported = imported; replacing = nil; finishRequested = false; forceCapture = false; captureFailures = 0
     holdForNext = false; armAfterTurn = false; armGate.reset(); armDeadline = .infinity; recentViews = []; noteActivity()
-    discardOpenPage()
+    discardOpenPage(); savedPageWords = []; stillSpoken = false
     result = nil; showPDF = false; progress = 0; attempts = 0; solveStatus = ""
     sample = PageSample(); preview = nil; lastFrameTime = -Double.infinity
     camera.glassesButtons = glassesButtons; voice.privateOnly = privateAudio
@@ -391,7 +395,7 @@ final class AutoScanModel {
         if phase == .awaitingNext {
           // After an earlier page was fixed, the sheets in front of the wearer were already scanned: wait for 👉.
           if holdForNext { return }
-          if pages.count < Self.maxPages, turnGate.observe(value, at: time) { noteActivity(); nextPage() }
+          if pages.count < Self.maxPages, turnGate.observe(value, at: time) { noteActivity(); nextPage(fromTurn: true) }
           else if time - awaitingSince > 4, value.acceptable, !value.closeEnough { speakCue(.closer, at: time) }
           else if time - awaitingSince > 6, value.acceptable, !nextHintGiven {
             // Look-alike pages may not register as a page turn.
@@ -447,18 +451,23 @@ final class AutoScanModel {
       guard phase == .seeking else { return }
       keep(value, image: image, text: text, at: time)
       if forced { forceCapture = false; await commitPage(id: id); return }
-    } else if !steady {
-      guideFrame(value, at: time)
     }
+    let cued = !steady && guideFrame(value, at: time)
     guard runID == id, phase == .seeking else { return }
     if pageFrames.isComplete(at: time) { await commitPage(id: id); return }
-    if !pageFrames.isEmpty {
+    if !pageFrames.isEmpty && !cued {
       progress = min(0.99, (time - pageFrames.lastNew) / pageFrames.configuration.quietTime)
       guide = "Page \((replacing ?? pages.count) + 1): \(pageSummary())"
     }
   }
 
   private func keep(_ value: PageSample, image: CGImage, text: FrameText, at time: TimeInterval) {
+    if pageFrames.isEmpty, replacing == nil,
+      PageFrames.overlap(text.signature, with: savedPageWords) >= pageFrames.configuration.sameView {
+      // The sheet just saved is still in view (seen whole, or a part already kept): not the next page.
+      if !stillSpoken { stillSpoken = true; say("Still page \(pages.count). Turn the page, or thumbs-left to retake it.") }
+      return
+    }
     let frameID = nextFrameID; nextFrameID += 1
     switch pageFrames.offer(value, text: text, id: frameID, at: time) {
     case .added(let new):
@@ -474,7 +483,7 @@ final class AutoScanModel {
       Task { [weak self] in await self?.commitPage(id: run) }
       return
     }
-    noteActivity()
+    noteActivity(); stillSpoken = false
     let found = questions.observe(text.labels)
     if !found.new.isEmpty { say(QuestionLabels.spoken(found.new) + ".") }
     let missing = (found.missing + pageFrames.missing).filter { missingSpoken.insert($0).inserted }
@@ -483,12 +492,13 @@ final class AutoScanModel {
     }
   }
 
-  private func guideFrame(_ value: PageSample, at time: TimeInterval) {
+  /// Directions for a frame that cannot be kept; returns whether one was given (it stays on screen this frame).
+  private func guideFrame(_ value: PageSample, at time: TimeInterval) -> Bool {
     let tooSmall = value.acceptable && value.contentBounds != nil && !pageFrames.isBigEnough(value)
     let cue: ScanCue = tooSmall || (!value.closeEnough && value.cue == .hold) ? .closer : value.cue
-    if pageFrames.isEmpty || !value.acceptable || tooSmall {
-      guide = value.issue ?? cue.message; speakCue(cue, at: time)
-    }
+    guard pageFrames.isEmpty || !value.acceptable || tooSmall else { return false }
+    guide = value.issue ?? cue.message; speakCue(cue, at: time)
+    return true
   }
 
   /// Saves the kept frames as one page (in the order they were first taken) and continues like a saved still.
@@ -500,14 +510,17 @@ final class AutoScanModel {
     phase = .checking; progress = 0; guide = "Saving page \((replacing ?? pages.count) + 1): \(summary)…"
     let images = kept.map(\.image)
     do {
-      let jpegs = try await Task.detached(priority: .userInitiated) {
-        try images.map { try PageAnalyzer.encodeJPEG($0, quality: 0.9) }
+      let (jpegs, thumbnail) = try await Task.detached(priority: .userInitiated) {
+        let jpegs = try images.map { try PageAnalyzer.encodeJPEG($0, quality: 0.9) }
+        return (jpegs, PageAnalyzer.thumbnail(jpegs[0])) // a small preview, not a full frame kept per page
       }.value
       guard runID == id else { return }
-      // The next page is whatever looks unlike every view of this one.
+      // The next page is whatever looks unlike every view of this one, and does not repeat its text.
       turnGate.saved(kept.map(\.sample), at: ProcessInfo.processInfo.systemUptime)
+      let words = pageFrames.words
       discardOpenPage()
-      try await saved(jpegs, thumbnail: images.first, restart: nil, id: id, summary: summary)
+      savedPageWords = words; stillSpoken = false
+      try await saved(jpegs, thumbnail: thumbnail, restart: nil, id: id, summary: summary)
     } catch {
       guard runID == id else { return }
       fail(error.localizedDescription + " Your saved pages are kept.")
