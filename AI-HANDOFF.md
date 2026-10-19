@@ -2,7 +2,7 @@
 
 Start here when continuing this project. This file records the product intent, current implementation, operating instructions, decisions, and unfinished work; no earlier chat is required.
 
-**Snapshot updated:** 2026-10-19 UTC. **App:** 2.2, build 8 (live multi-frame capture; CI pending at this line's update; 2.1 below is the last verified build), on branch `claude/pensive-allen-ggkllj`, which is based on `solver-app`. **Verified app commit:** `3129449` (CI run 39203283744, build and verify green, 100 tests, 0 failures). 2.0 was verified at `f963ee9` (run 39197936367, 89 tests). Later documentation commits do not imply a new app build. Recheck the branch and CI before relying on this snapshot.
+**Snapshot updated:** 2026-10-19 UTC. **App:** 2.2, build 8 (live multi-frame capture). 2.2 head `472bce9`: CI run 39230811663 build green, IPA artifact 12176689395 (sha256 `2a9220bb…`); its test job was not awaited because the user chose to test on the device. The previous 2.2 commit `ec1e752` passed build and tests (run 39229059366). The 2.1 evidence below is the last full release check, on branch `claude/pensive-allen-ggkllj`, which is based on `solver-app`. **Verified app commit:** `3129449` (CI run 39203283744, build and verify green, 100 tests, 0 failures). 2.0 was verified at `f963ee9` (run 39197936367, 89 tests). Later documentation commits do not imply a new app build. Recheck the branch and CI before relying on this snapshot.
 
 ## 1. Find the right branch and read these files
 
