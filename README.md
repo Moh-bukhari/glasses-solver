@@ -1,6 +1,6 @@
 # Glasses Solver
 
-Personal iPhone app (1.3): **scan papers → say “finish scanning” → OpenAI + Claude review → one combined PDF**.
+Personal iPhone app (1.3.1): **scan papers → say “finish scanning” → OpenAI + Claude review → one combined PDF**.
 
 See [installation and usage](SOLVER-SETUP.md). Download the IPA from a successful [cloud build on solver-app](https://github.com/Moh-bukhari/glasses-solver/actions/workflows/build-solver.yml), with both build and verification jobs passing. Code is developed on the `solver-app` branch (PR #1).
 

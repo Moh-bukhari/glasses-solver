@@ -16,3 +16,6 @@ Meta's SDK resolves a keychain access group during initialization. Simulator tes
 - Forgiving framing must not mean accepting tiny distant writing after a timeout. Gate on useful text detail, not paper/background geometry, and keep the original photo.
 - Batch capture must wait for explicit completion before uploading, retain ordered pages on failure, and avoid repeatedly photographing the same stationary sheet. Quiet spoken guidance needs its own low default volume and must not trigger its own voice commands.
 - A cold simulator's mock video feed may not deliver its first frame within the five-second coordinator-test window. Give the SDK integration check a separate bounded 20-second startup allowance while retaining the actual-frame and full-photo assertions; do not relax app quality checks to fix simulator timing.
+
+- Swift 6 legacy AVAudio/Speech callbacks created inside a MainActor class must be explicitly Sendable even when their bodies only touch a locked helper. Test the actual callback on a background executor; a fake voice service and a successful IPA build cannot catch an executor assertion on the first microphone buffer.
+- Permission prompts can outlive cancellation. Guard each asynchronous startup with a unique run identity, not only an active Boolean, and prepare voice permissions before starting capture.

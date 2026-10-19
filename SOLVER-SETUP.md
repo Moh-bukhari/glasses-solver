@@ -1,4 +1,6 @@
-# Glasses Solver 1.3 — scan a packet, receive one PDF
+# Glasses Solver 1.3.1 — scan a packet, receive one PDF
+
+Version 1.3.1 fixes unsafe Swift 6 audio/Speech callbacks that could close the app when scanning starts. Voice permissions and listening are prepared before camera capture. A microphone interruption stops commands with an on-screen fallback while scanning continues. If testing the earlier 1.3, turn off **Hands-free voice commands** in Settings as a temporary diagnostic; spoken guidance is a separate switch. Install the update over the existing app to retain drafts and settings.
 
 ## Install from Windows
 
@@ -61,7 +63,7 @@ Default Claude model: `claude-sonnet-5-5`, with an Opus 5.5 preset and editable 
 
 ## Verification
 
-GitHub Actions compiles a Release iPhone IPA and runs `AutoScanTests` on the iOS simulator, including the real Meta mock-device camera transition. Fixtures cover clarity/stability, close-up gating, page-turn latching, voice parsing/default volume, batch finish behavior, ordered draft persistence, cancellation, both API envelopes, credential separation, bounded recovery, complete-answer validation and multi-source PDF pagination.
+GitHub Actions compiles a Release iPhone IPA and runs `AutoScanTests` on the iOS simulator, including the real Meta mock-device camera transition. Fixtures cover clarity/stability, close-up gating, page-turn latching, voice parsing/default volume, actual production callbacks invoked on a background thread, cancelled/stale permission prompts and ordered camera/voice startup, batch finish behavior, ordered draft persistence, cancellation, both API envelopes, credential separation, bounded recovery, complete-answer validation and multi-source PDF pagination.
 
 No paid live API keys or physical glasses/microphone are available in CI. Passing tests are evidence for software behavior, not a claim of hardware/voice recognition accuracy or correct answers to arbitrary papers.
 

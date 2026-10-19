@@ -44,71 +44,134 @@ final class ScanVoice: NSObject, ScanSpeaking, AVSpeechSynthesizerDelegate {
   var onCommand: ((ScanCommand) -> Void)?
   var onStatus: ((String) -> Void)?
   private let speech = AVSpeechSynthesizer()
-  private let engine = AVAudioEngine()
+  private var engine: AVAudioEngine?
+  private var tappedInput: AVAudioInputNode?
   private let feed = RecognitionFeed()
   private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+  private let speechAuthorization: @MainActor () async -> SFSpeechRecognizerAuthorizationStatus
+  private let microphoneAuthorization: @MainActor () async -> Bool
   private var recognition: SFSpeechRecognitionTask?
   private var restart: Task<Void, Never>?
   private var unmute: Task<Void, Never>?
   private var active = false
-  private var installedTap = false
+  private var listening = false
+  private var startupID = UUID()
+  private var audioObservers: [NSObjectProtocol] = []
   private var generation = UUID()
   private var speechGeneration = UUID()
   private var lastCommand = -Double.infinity
   private var failures = 0
-  override init() { super.init(); speech.delegate = self }
+  init(speechAuthorization: @escaping @MainActor () async -> SFSpeechRecognizerAuthorizationStatus = ScanVoice.authorizeSpeech,
+       microphoneAuthorization: @escaping @MainActor () async -> Bool = ScanVoice.authorizeMicrophone) {
+    self.speechAuthorization = speechAuthorization; self.microphoneAuthorization = microphoneAuthorization
+    super.init(); speech.delegate = self
+  }
+
+  private static func authorizeSpeech() async -> SFSpeechRecognizerAuthorizationStatus {
+    await withCheckedContinuation { continuation in
+      SFSpeechRecognizer.requestAuthorization { @Sendable status in continuation.resume(returning: status) }
+    }
+  }
+  private static func authorizeMicrophone() async -> Bool {
+    await withCheckedContinuation { continuation in
+      AVAudioApplication.requestRecordPermission { @Sendable allowed in continuation.resume(returning: allowed) }
+    }
+  }
 
   func startCommands() async {
-    guard !active else { return }; active = true
-    let granted: SFSpeechRecognizerAuthorizationStatus = await withCheckedContinuation { continuation in
-      SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
+    guard !active, !Task.isCancelled else { return }
+    active = true; startupID = UUID(); let id = startupID
+    let granted = await speechAuthorization()
+    guard continueStartup(id) else { return }
+    guard granted == .authorized else {
+      stopCommands(); onStatus?("Voice commands unavailable. Allow Speech Recognition in iPhone Settings, or use Finish scanning."); return
     }
-    guard active else { return }
-    let microphone: Bool = await withCheckedContinuation { continuation in
-      AVAudioSession.sharedInstance().requestRecordPermission { continuation.resume(returning: $0) }
-    }
-    guard active else { return }
-    guard granted == .authorized, microphone else {
-      active = false; onStatus?("Voice commands unavailable. Allow Speech Recognition and Microphone in iPhone Settings, or use Finish scanning."); return
+    let microphone = await microphoneAuthorization()
+    guard continueStartup(id) else { return }
+    guard microphone else {
+      stopCommands(); onStatus?("Voice commands unavailable. Allow Microphone in iPhone Settings, or use Finish scanning."); return
     }
     guard let recognizer, recognizer.supportsOnDeviceRecognition, recognizer.isAvailable else {
-      active = false; onStatus?("On-device English speech is unavailable. Use Finish scanning on screen."); return
+      stopCommands(); onStatus?("On-device English speech is unavailable. Use Finish scanning on screen."); return
     }
     do {
       let session = AVAudioSession.sharedInstance()
       try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker])
       try session.setActive(true)
-      let input = engine.inputNode, format = engine.inputNode.outputFormat(forBus: 0)
-      guard format.sampleRate > 0, format.channelCount > 0 else { throw SolverError.message("No microphone input.") }
-      let feed = self.feed
-      input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in feed.append(buffer) }
-      installedTap = true; engine.prepare(); try engine.start()
-      failures = 0; startRecognition()
+      guard session.isInputAvailable, !session.currentRoute.inputs.isEmpty else { throw SolverError.message("No microphone input.") }
+      // An engine created before Bluetooth activation can retain the previous route's format.
+      let engine = AVAudioEngine(); self.engine = engine
+      let input = engine.inputNode, format = input.outputFormat(forBus: 0)
+      let hardware = input.inputFormat(forBus: 0)
+      guard format.sampleRate > 0, format.channelCount > 0,
+            hardware.sampleRate > 0, hardware.channelCount > 0 else { throw SolverError.message("Microphone is not ready.") }
+      input.installTap(onBus: 0, bufferSize: 1024, format: nil, block: makeAudioTap())
+      tappedInput = input; try engine.start()
+      listening = true; failures = 0; lastCommand = -Double.infinity
+      observeAudioChanges(engine: engine, id: id); startRecognition()
       onStatus?("Listening on device: “next page”, “retake last page”, “finish scanning”.")
     } catch {
       stopCommands(); onStatus?("Voice commands could not start. Use Finish scanning. \(error.localizedDescription)")
     }
   }
+  private func continueStartup(_ id: UUID) -> Bool {
+    guard active, startupID == id else { return false }
+    if Task.isCancelled { stopCommands(); return false }
+    return true
+  }
+
+  // Explicitly Sendable is essential: an unannotated AVAudio callback created in
+  // this MainActor class otherwise traps on the audio thread in Swift 6.
+  func makeAudioTap() -> @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void {
+    let feed = self.feed
+    return { @Sendable buffer, _ in feed.append(buffer) }
+  }
+
+  private func observeAudioChanges(engine: AVAudioEngine, id: UUID) {
+    let center = NotificationCenter.default
+    let notices: [(Notification.Name, AnyObject?)] = [
+      (.AVAudioEngineConfigurationChange, engine),
+      (AVAudioSession.interruptionNotification, AVAudioSession.sharedInstance()),
+      (AVAudioSession.mediaServicesWereResetNotification, AVAudioSession.sharedInstance())
+    ]
+    for (name, object) in notices {
+      audioObservers.append(center.addObserver(forName: name, object: object, queue: nil) { @Sendable [weak self] _ in
+        Task { @MainActor [weak self] in
+          guard let self, self.active, self.startupID == id else { return }
+          self.stopCommands()
+          self.onStatus?("Microphone connection changed. Scanning continues. Use Finish scanning, or pause and resume to restore voice commands.")
+        }
+      })
+    }
+  }
+
   func stopCommands() {
-    active = false; generation = UUID(); restart?.cancel(); restart = nil
+    active = false; listening = false; startupID = UUID(); generation = UUID(); restart?.cancel(); restart = nil
+    for observer in audioObservers { NotificationCenter.default.removeObserver(observer) }
+    audioObservers.removeAll()
     feed.replace(nil); recognition?.cancel(); recognition = nil
-    if engine.isRunning { engine.stop() }
-    if installedTap { engine.inputNode.removeTap(onBus: 0); installedTap = false }
+    engine?.stop()
+    tappedInput?.removeTap(onBus: 0); tappedInput = nil; engine = nil
   }
   private func startRecognition() {
-    guard active, let recognizer else { return }
-    generation = UUID(); let id = generation
+    guard active, listening, let recognizer else { return }
+    generation = UUID()
     recognition?.cancel(); restart?.cancel()
     let request = SFSpeechAudioBufferRecognitionRequest()
     request.requiresOnDeviceRecognition = true; request.shouldReportPartialResults = true
     request.taskHint = .confirmation
     request.contextualStrings = ["finish scanning", "next page", "retake last page", "cancel scanning"]
     feed.replace(request)
-    recognition = recognizer.recognitionTask(with: request) { [weak self] result, error in
+    recognition = recognizer.recognitionTask(with: request, resultHandler: makeRecognitionHandler())
+    scheduleRestart(after: 45)
+  }
+  func makeRecognitionHandler() -> @Sendable (SFSpeechRecognitionResult?, (any Error)?) -> Void {
+    let id = generation
+    return { @Sendable [weak self] result, error in
       let text = result?.bestTranscription.formattedString, final = result?.isFinal ?? false
       let failed = error != nil
       Task { @MainActor [weak self] in
-        guard let self, self.active, self.generation == id else { return }
+        guard let self, self.active, self.listening, self.generation == id else { return }
         let time = ProcessInfo.processInfo.systemUptime
         if !self.speech.isSpeaking, time - self.lastCommand > 2, let text, let command = ScanCommand.parse(text) {
           self.lastCommand = time; self.onCommand?(command)
@@ -123,7 +186,6 @@ final class ScanVoice: NSObject, ScanSpeaking, AVSpeechSynthesizerDelegate {
         }
       }
     }
-    scheduleRestart(after: 45)
   }
   private func scheduleRestart(after seconds: Double) {
     restart?.cancel()
@@ -142,7 +204,7 @@ final class ScanVoice: NSObject, ScanSpeaking, AVSpeechSynthesizerDelegate {
     speech.speak(utterance)
   }
   func stopSpeaking() {
-    unmute?.cancel(); speech.stopSpeaking(at: .immediate); feed.mute(false)
+    speechGeneration = UUID(); unmute?.cancel(); speech.stopSpeaking(at: .immediate); feed.mute(false)
   }
   nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
     Task { @MainActor [weak self] in self?.resumeAfterSpeech() }

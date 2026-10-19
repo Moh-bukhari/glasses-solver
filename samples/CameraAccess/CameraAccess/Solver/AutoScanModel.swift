@@ -34,7 +34,6 @@ final class AutoScanModel {
   @ObservationIgnored private let voice: any ScanSpeaking
   @ObservationIgnored private var worker: Task<Void, Never>?
   @ObservationIgnored private var analysisTask: Task<Void, Never>?
-  @ObservationIgnored private var voiceTask: Task<Void, Never>?
   @ObservationIgnored private var runID = UUID()
   @ObservationIgnored private var gate = StabilityGate()
   @ObservationIgnored private var turnGate = PageTurnGate()
@@ -78,13 +77,16 @@ final class AutoScanModel {
     worker = Task { [weak self] in
       guard let self else { return }
       do {
+        if voiceCommands {
+          guide = "Preparing hands-free commands…"; voiceStatus = "Checking microphone and speech permissions…"
+          await voice.startCommands()
+          try Task.checkCancellation(); guard runID == id else { return }
+        } else { voiceStatus = "Voice commands are off. Use Finish scanning on screen." }
+        guide = "Connecting to your glasses…"
         try await camera.start(); try Task.checkCancellation()
         guard runID == id else { return }
         phase = .seeking; guide = "Bring the writing close enough to read. Keep all parts of this problem in view."
         say(index == nil ? "Ready for page \(pages.count + 1). Move close to the writing." : "Replacing page \(index! + 1). Look at that page.")
-        if voiceCommands {
-          voiceTask = Task { [weak self] in await self?.voice.startCommands() }
-        } else { voiceStatus = "Voice commands are off. Use Finish scanning on screen." }
       } catch { guard runID == id else { return }; fail(error.localizedDescription) }
     }
   }
@@ -163,8 +165,8 @@ final class AutoScanModel {
     } catch { guide = "Could not clear the previous draft. \(error.localizedDescription)" }
   }
   func stop() {
-    runID = UUID(); worker?.cancel(); analysisTask?.cancel(); voiceTask?.cancel()
-    worker = nil; analysisTask = nil; voiceTask = nil; camera.stop(); gate.reset(); turnGate.reset()
+    runID = UUID(); worker?.cancel(); analysisTask?.cancel()
+    worker = nil; analysisTask = nil; camera.stop(); gate.reset(); turnGate.reset()
     voice.stopCommands(); voice.stopSpeaking(); phase = .idle; progress = 0
     guide = "Paused. \(pages.count) pages remain saved."; restoreIdleTimer()
   }
@@ -173,8 +175,8 @@ final class AutoScanModel {
     stop(); guide = "Paused when the app left the screen. Your pages are saved; resume when ready."
   }
   private func begin(imported: Bool) {
-    runID = UUID(); worker?.cancel(); analysisTask?.cancel(); voiceTask?.cancel(); analysisTask = nil
-    camera.stop(); voice.stopCommands(); gate.reset(); turnGate.reset(); speechGate.reset()
+    runID = UUID(); worker?.cancel(); analysisTask?.cancel(); analysisTask = nil
+    camera.stop(); voice.stopCommands(); voice.stopSpeaking(); gate.reset(); turnGate.reset(); speechGate.reset()
     self.imported = imported; replacing = nil; finishRequested = false
     result = nil; showPDF = false; progress = 0; attempts = 0
     sample = PageSample(); preview = nil; lastFrameTime = -Double.infinity
@@ -266,7 +268,7 @@ final class AutoScanModel {
     catch { try Task.checkCancellation(); guard runID == id else { return }; try await camera.start() }
   }
   private func fail(_ message: String) {
-    runID = UUID(); worker?.cancel(); analysisTask?.cancel(); voiceTask?.cancel(); analysisTask = nil
+    runID = UUID(); worker?.cancel(); analysisTask?.cancel(); analysisTask = nil
     camera.stop(); voice.stopCommands(); gate.reset(); restoreIdleTimer()
     phase = .failed; guide = message; progress = 0; say("Paused. " + message)
   }

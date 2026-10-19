@@ -3,6 +3,8 @@ import XCTest
 import UIKit
 import PDFKit
 import CoreImage
+import AVFoundation
+import Speech
 import MWDATCore
 import MWDATMockDevice
 
@@ -334,6 +336,98 @@ final class AutoScanTests: XCTestCase {
     XCTAssertNil(ScanCommand.parse("I am scanning a page"))
     XCTAssertEqual(ScanVoice.quietVolume, 0.05, accuracy: 0.0001)
   }
+  func testProductionVoiceCallbacksCanRunOffMainActor() async throws {
+    let voice = ScanVoice()
+    // Execute exactly the closures installed in AVAudioEngine and Speech, not a fake listener.
+    // An implicitly MainActor callback aborts the process here under Swift 6.
+    let tap = voice.makeAudioTap(), resultHandler = voice.makeRecognitionHandler()
+    let usedBackgroundThread = try await Task.detached {
+      let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1))
+      let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1024))
+      buffer.frameLength = 1024
+      buffer.floatChannelData?[0].initialize(repeating: 0, count: 1024)
+      let time = AVAudioTime(sampleTime: 0, atRate: 48000)
+      for _ in 0..<32 { tap(buffer, time) }
+      resultHandler(nil, URLError(.cancelled))
+      return !Thread.isMainThread
+    }.value
+    XCTAssertTrue(usedBackgroundThread)
+    voice.stopCommands()
+  }
+  func testOldSpeechPermissionCannotReviveListenerAfterStopAndRestart() async {
+    var requests: [CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>] = []
+    var microphoneRequests = 0, statuses: [String] = []
+    let voice = ScanVoice(speechAuthorization: {
+      await withCheckedContinuation { requests.append($0) }
+    }, microphoneAuthorization: { microphoneRequests += 1; return false })
+    voice.onStatus = { statuses.append($0) }
+    let old = Task { await voice.startCommands() }
+    await waitUntil { requests.count == 1 }
+    voice.stopCommands()
+    let current = Task { await voice.startCommands() }
+    await waitUntil { requests.count == 2 }
+    guard requests.count == 2 else { XCTFail("Both permission requests should be pending"); return }
+    requests[0].resume(returning: .authorized); await old.value
+    XCTAssertEqual(microphoneRequests, 0); XCTAssertTrue(statuses.isEmpty)
+    requests[1].resume(returning: .denied); await current.value
+    XCTAssertEqual(statuses.count, 1); XCTAssertEqual(microphoneRequests, 0)
+    voice.stopCommands()
+  }
+  func testCancelledPermissionTaskCannotStartMicrophone() async {
+    var request: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>?
+    var microphoneRequests = 0, statuses: [String] = []
+    let voice = ScanVoice(speechAuthorization: {
+      await withCheckedContinuation { request = $0 }
+    }, microphoneAuthorization: { microphoneRequests += 1; return false })
+    voice.onStatus = { statuses.append($0) }
+    let pending = Task { await voice.startCommands() }
+    await waitUntil { request != nil }
+    pending.cancel(); request?.resume(returning: .authorized); await pending.value
+    XCTAssertEqual(microphoneRequests, 0); XCTAssertTrue(statuses.isEmpty)
+    voice.stopCommands()
+  }
+  func testLateMicrophonePermissionCannotChangeNewVoiceRun() async {
+    var microphone: CheckedContinuation<Bool, Never>?
+    var speechRequests = 0, statuses: [String] = []
+    let voice = ScanVoice(speechAuthorization: {
+      speechRequests += 1; return speechRequests == 1 ? .authorized : .denied
+    }, microphoneAuthorization: {
+      await withCheckedContinuation { microphone = $0 }
+    })
+    voice.onStatus = { statuses.append($0) }
+    let old = Task { await voice.startCommands() }
+    await waitUntil { microphone != nil }
+    voice.stopCommands(); await voice.startCommands()
+    XCTAssertEqual(statuses.count, 1)
+    microphone?.resume(returning: true); await old.value
+    XCTAssertEqual(statuses.count, 1, "An old microphone answer must not activate audio or overwrite the current status.")
+    voice.stopCommands()
+  }
+  func testCameraAndReadyCueWaitForVoicePreparation() async {
+    let camera = FakeScanCamera(data: Data()), voice = FakeScanVoice()
+    var ready: CheckedContinuation<Void, Never>?
+    voice.startHook = { await withCheckedContinuation { ready = $0 } }
+    let model = AutoScanModel(camera: camera, analyzer: FakePageAnalyzer(sample: goodSample()),
+      solver: FakePageSolver(page: solvedPage()), saver: FakeSolutionSaver(), draft: temporaryDraft(), voice: voice)
+    model.start(); await waitUntil { ready != nil }
+    XCTAssertEqual(model.phase, .connecting); XCTAssertEqual(camera.starts, 0)
+    XCTAssertTrue(voice.messages.isEmpty)
+    ready?.resume(); await waitUntil { model.phase == .seeking }
+    XCTAssertEqual(camera.starts, 1); XCTAssertEqual(voice.messages.count, 1)
+    model.stop()
+  }
+  func testStoppingDuringVoicePreparationDoesNotStartCameraLater() async {
+    let camera = FakeScanCamera(data: Data()), voice = FakeScanVoice()
+    var ready: CheckedContinuation<Void, Never>?
+    voice.startHook = { await withCheckedContinuation { ready = $0 } }
+    let model = AutoScanModel(camera: camera, analyzer: FakePageAnalyzer(sample: goodSample()),
+      solver: FakePageSolver(page: solvedPage()), saver: FakeSolutionSaver(), draft: temporaryDraft(), voice: voice)
+    model.start(); await waitUntil { ready != nil }
+    model.stop(); ready?.resume()
+    await waitUntil { voice.startReturned }
+    XCTAssertEqual(model.phase, .idle); XCTAssertEqual(camera.starts, 0)
+    XCTAssertTrue(voice.messages.isEmpty)
+  }
   func testTwoPagesWaitForFinishAndDuplicateFramesDoNotUpload() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
     let solver = FakePageSolver(page: solvedPage()), saver = FakeSolutionSaver()
@@ -567,9 +661,12 @@ private final class FakeSolutionSaver: SolutionSaving {
 private final class FakeScanVoice: ScanSpeaking {
   var onCommand: ((ScanCommand) -> Void)?
   var onStatus: ((String) -> Void)?
-  func startCommands() async {}
+  var startHook: (() async -> Void)?
+  var startReturned = false
+  var messages: [String] = []
+  func startCommands() async { await startHook?(); startReturned = true }
   func stopCommands() {}
-  func say(_ message: String, volume: Float) {}
+  func say(_ message: String, volume: Float) { messages.append(message) }
   func stopSpeaking() {}
 }
 
