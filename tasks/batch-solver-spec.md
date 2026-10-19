@@ -1,3 +1,5 @@
+> **Superseded by [one-button-gesture-spec.md](one-button-gesture-spec.md) (2.0).** Per-page streaming solving replaced the inventory/group/reconcile pipeline below, and pages may now be solved during scanning. Kept for history.
+
 # Batch paper-to-PDF acceptance contract
 
 - Collect up to 12 ordered photos before any AI upload. Save each original locally immediately; retain the draft across pauses, backgrounding, errors, and app restarts. Allow replacing/removing a selected page and importing photos.

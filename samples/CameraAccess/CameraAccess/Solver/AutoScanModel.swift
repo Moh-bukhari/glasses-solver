@@ -408,12 +408,13 @@ final class AutoScanModel {
     let job = PageJob(key: key, number: index + 1, primary: pages[index].url,
       previous: key.previous.flatMap { urls[$0] }, next: key.next.flatMap { urls[$0] })
     let token = UUID(), solver = self.solver
+    let notify: @Sendable (String) -> Void = { [weak self] message in
+      Task { @MainActor in self?.solveNotice(message) }
+    }
     let task = Task { [weak self] in
       let outcome: Result<PageResult, any Error>
       do {
-        let value = try await solver.solve(job, configuration: configuration) { message in
-          Task { @MainActor [weak self] in self?.solveNotice(message) }
-        }
+        let value = try await solver.solve(job, configuration: configuration, progress: notify)
         outcome = .success(value)
       } catch { outcome = .failure(error) }
       self?.jobFinished(key, token: token, number: job.number, outcome: outcome)
