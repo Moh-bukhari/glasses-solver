@@ -2,7 +2,7 @@
 
 Start here when continuing this project. This file records the product intent, current implementation, operating instructions, decisions, and unfinished work; no earlier chat is required.
 
-**Snapshot updated:** 2026-10-19 UTC. **App:** 2.0, build 6, on branch `claude/pensive-allen-ggkllj`, which is based on `solver-app`. **Verified app commit:** `f963ee936004753ddfbf4c18e4f8262a3accc6ed` (CI run 39197936367, build and verify green, 89 tests, 0 failures). Later documentation commits do not imply a new app build. Recheck the branch and CI before relying on this snapshot.
+**Snapshot updated:** 2026-10-19 UTC. **App:** 2.1, build 7, on branch `claude/pensive-allen-ggkllj`, which is based on `solver-app`. **Verified app commit:** `3129449` (CI run 39203283744, build and verify green, 100 tests, 0 failures). 2.0 was verified at `f963ee9` (run 39197936367, 89 tests). Later documentation commits do not imply a new app build. Recheck the branch and CI before relying on this snapshot.
 
 ## 1. Find the right branch and read these files
 
@@ -66,14 +66,15 @@ Preserve these decisions:
 
 Evidence:
 
-- **CI run.** [Run 39197936367](https://github.com/Moh-bukhari/glasses-solver/actions/runs/39197936367) on `f963ee9`. Both the build and verify jobs passed: **89 tests, 0 failures**.
-  - AutoScanTests: 46. These include the Meta mock-glasses test covering preview frames, Inputs activation and button mapping, touchpad pause/resume notices, and the full-resolution photo.
-  - PageSolvingTests: 21. HandGestureTests: 20. GlassesInputTests: 2.
-- **IPA artifact.** `GlassesSolver-IPA` (ID 12162622480, sha256 `a48b478a…`) [from that run](https://github.com/Moh-bukhari/glasses-solver/actions/runs/39197936367/artifacts/12162622480). Artifacts expire 2027-01-17.
+- **CI run (2.1).** [Run 39203283744](https://github.com/Moh-bukhari/glasses-solver/actions/runs/39203283744) on `3129449`. Both jobs passed: **100 tests, 0 failures**. The build job also confirmed that the App Intents metadata in `CameraAccess.app` contains `StartScanIntent`.
+  - AutoScanTests: 51. These include the 2.1 hands-free flows and the Meta mock-glasses test (preview frames, Inputs activation and button mapping, touchpad pause/resume notices, the full-resolution photo).
+  - HandGestureTests: 26. PageSolvingTests: 21. GlassesInputTests: 2.
+- **IPA artifact (2.1).** `GlassesSolver-IPA` (ID 12164696360, sha256 `db2416df…`) [from that run](https://github.com/Moh-bukhari/glasses-solver/actions/runs/39203283744/artifacts/12164696360). Artifacts expire 2027-01-17.
+- **2.0 evidence.** [Run 39197936367](https://github.com/Moh-bukhari/glasses-solver/actions/runs/39197936367) on `f963ee9`: 89 tests; IPA artifact 12162622480.
 - **Mock probe.** The Meta mock reports "Critical error, the stream should end" when the stream restarts after a full photo, so the app falls back to a full reconnect; see priority 5.
 - **Later runs.** Check later runs on this branch before installing a newer commit. A run counts only when both jobs passed and its head SHA matches the commit.
-- **Linux.** The logic-only suites also pass on Linux under Swift 6.3. That is supporting evidence, not a replacement for CI.
-- **Review.** An adversarial multi-lens review (compile, coordinator, SDK, pipeline, tests, requirements) was run, and every confirmed finding is fixed at the verified commit.
+- **Linux.** The logic-only suites (24 gesture, 20 page-solving) and 40 image-free coordinator tests also pass on Linux under Swift 6.3. That is supporting evidence, not a replacement for CI.
+- **Review.** 2.0: an adversarial multi-lens review (compile, coordinator, SDK, pipeline, tests, requirements) was run, and every confirmed finding was fixed. 2.1: a review (compile, coordinator, hands-free walkthrough, gestures, tests) is in progress at this snapshot.
 
 History: the user confirmed that 1.x glasses capture and PDF generation worked. They then reported that **"solving" never produced a PDF**. The cause was the latency of a sequential, non-streaming multi-stage pipeline (§6), not a deadlock.
 
