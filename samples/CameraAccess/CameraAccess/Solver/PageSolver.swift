@@ -200,7 +200,9 @@ struct PageCheck: Codable, Sendable, Equatable {
       let value = text.trimmed.lowercased()
       return value.isEmpty || ["none", "none.", "n/a", "-", "—", "nothing", "no"].contains(value)
     }
-    let dropped = Array(Set((blurry + otherSheet).filter { (1...max(1, count)).contains($0) })).sorted()
+    let photos = 1...max(1, count)
+    let dropped = Array(Set((blurry + otherSheet).filter { photos.contains($0) })).sorted()
+    let wrongSheet = Set(otherSheet.filter { photos.contains($0) }).count == count
     let clear = verdict.trimmed.lowercased() == "solvable" && !questions.isEmpty
       && questions.allSatisfy { blank($0.unclear) && !$0.read.contains("?") } && blank(unseen) && dropped.count < count
     guard !clear else { return PageVerdict(clear: true, say: "", dropped: dropped) }
@@ -211,7 +213,7 @@ struct PageCheck: Codable, Sendable, Equatable {
       say = "Look closer at \(item.label), and hold still."
     } else if !blank(unseen) { say = "Show the rest of the sheet, slowly." }
     else { say = "Look at the whole sheet again, closer and steadier." }
-    return PageVerdict(clear: false, say: say, dropped: dropped)
+    return PageVerdict(clear: false, say: say, dropped: dropped, wrongSheet: wrongSheet)
   }
 }
 
@@ -221,11 +223,14 @@ struct PageVerdict: Sendable, Equatable {
   let clear: Bool
   let say: String
   let dropped: [Int]
+  /// Every photo shows a different sheet than the one to check (a retake of the wrong page).
+  var wrongSheet = false
 }
 
 protocol PageChecking: Sendable {
-  /// `photos` are one sheet's JPEG frames in capture order; `page` is its number in the packet.
-  func check(_ photos: [Data], page: Int, configuration: SolverConfiguration) async throws -> PageVerdict
+  /// `photos` are one sheet's JPEG frames in capture order; `page` is its number in the packet. `reference` is an earlier
+  /// photo of the page being retaken: the photos must show that same sheet.
+  func check(_ photos: [Data], page: Int, reference: Data?, configuration: SolverConfiguration) async throws -> PageVerdict
 }
 
 /// Asks the lead provider's fast model whether a sheet's photos are clear enough to solve, with one quick retry for an
@@ -238,11 +243,15 @@ actor PageChecker: PageChecking {
   init(transport: any AITransport = SolverClient(), retryDelay: Duration = .seconds(1)) {
     self.transport = transport; self.retryDelay = retryDelay
   }
-  func check(_ photos: [Data], page: Int, configuration: SolverConfiguration) async throws -> PageVerdict {
+  func check(_ photos: [Data], page: Int, reference: Data?, configuration: SolverConfiguration) async throws -> PageVerdict {
     try configuration.validate()
-    let labeled = photos.enumerated().map { AIPhoto(label: "Photo \($0.offset + 1) of \(photos.count):", jpeg: $0.element) }
-    let prompt = photos.count == 1 ? "Photo 1 shows one sheet, page \(page) of the packet. Check this sheet."
+    var labeled = photos.enumerated().map { AIPhoto(label: "Photo \($0.offset + 1) of \(photos.count):", jpeg: $0.element) }
+    var prompt = photos.count == 1 ? "Photo 1 shows one sheet, page \(page) of the packet. Check this sheet."
       : "Photos 1 to \(photos.count) show one sheet, page \(page) of the packet, oldest first. The wearer is looking at photo \(photos.count) now. Check this sheet."
+    if let reference {
+      labeled.insert(AIPhoto(label: "REFERENCE: an earlier photo of page \(page), the sheet being retaken. It may be unclear.", jpeg: reference), at: 0)
+      prompt += " The wearer is retaking page \(page): photos that do not show the REFERENCE sheet belong in otherSheet."
+    }
     var retried = false
     while true {
       try Task.checkCancellation()

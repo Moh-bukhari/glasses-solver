@@ -211,7 +211,7 @@ final class PageSolvingTests: XCTestCase {
     for (mode, model) in [(SolverMode.openAI, "gpt-6-luna"), (.claude, "claude-haiku-5-5")] {
       let transport = ScriptedTransport([.success(answer)])
       let configuration = SolverConfiguration(mode: mode, openAIKey: "o", claudeKey: "c")
-      let check = try await PageChecker(transport: transport).check([Data([1]), Data([2])], page: 3, configuration: configuration)
+      let check = try await PageChecker(transport: transport).check([Data([1]), Data([2])], page: 3, reference: nil, configuration: configuration)
       XCTAssertTrue(check.clear)
       let requests = await transport.requests
       let request = try XCTUnwrap(requests.first)
@@ -241,12 +241,15 @@ final class PageSolvingTests: XCTestCase {
     let transport = ScriptedTransport([.failure(missing), .success(answer), .success(answer)])
     let checker = PageChecker(transport: transport, retryDelay: .milliseconds(1))
     let configuration = SolverConfiguration(openAIKey: "o")
-    _ = try await checker.check([Data([1])], page: 1, configuration: configuration)
-    _ = try await checker.check([Data([1])], page: 2, configuration: configuration)
-    let models = await transport.requests.map(\.credential.model)
-    XCTAssertEqual(models, ["gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-sol"], "Remembered for the rest of the session.")
+    _ = try await checker.check([Data([1])], page: 1, reference: nil, configuration: configuration)
+    _ = try await checker.check([Data([1])], page: 2, reference: Data([9]), configuration: configuration)
+    let requests = await transport.requests
+    XCTAssertEqual(requests.map(\.credential.model), ["gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-sol"], "Remembered for the rest of the session.")
+    XCTAssertTrue(requests[2].photos[0].label.hasPrefix("REFERENCE: an earlier photo of page 2"), requests[2].photos[0].label)
+    XCTAssertEqual(requests[2].photos[1].label, "Photo 1 of 1:")
+    XCTAssertTrue(requests[2].prompt.contains("retaking page 2"))
     let denied = ScriptedTransport([.failure(AIServiceError.http(provider: .openAI, status: 401, retryAfter: nil, detail: "bad key"))])
-    do { _ = try await PageChecker(transport: denied).check([Data([1])], page: 1, configuration: configuration); XCTFail("A bad key is not a model problem") }
+    do { _ = try await PageChecker(transport: denied).check([Data([1])], page: 1, reference: nil, configuration: configuration); XCTFail("A bad key is not a model problem") }
     catch { XCTAssertEqual((error as? AIServiceError)?.retryAfter, nil) }
     let deniedModels = await denied.requests.map(\.credential.model)
     XCTAssertEqual(deniedModels, ["gpt-6-luna"])
@@ -269,6 +272,8 @@ final class PageSolvingTests: XCTestCase {
     let dropped = check([item("1")], blurry: [0, 2], other: [2, 9]).outcome(photos: 3)
     XCTAssertTrue(dropped.clear); XCTAssertEqual(dropped.dropped, [2], "Only photos that were sent can be dropped.")
     XCTAssertFalse(check([item("1")], other: [1, 2]).outcome(photos: 2).clear, "A page left with no photo is not clear.")
+    XCTAssertTrue(check([item("1")], other: [1, 2]).outcome(photos: 2).wrongSheet)
+    XCTAssertFalse(check([item("1")], blurry: [1], other: [2]).outcome(photos: 2).wrongSheet, "Blurry is not another sheet.")
   }
   func testRequestsStreamUseTheRequestedModelsAndSeparateCredentials() throws {
     let photo = AIPhoto(label: "PRIMARY page (source page 2), solve this page:", jpeg: Data([1, 2, 3]))

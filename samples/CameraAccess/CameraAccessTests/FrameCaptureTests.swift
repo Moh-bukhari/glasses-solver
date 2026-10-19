@@ -89,6 +89,22 @@ final class FrameCaptureTests: XCTestCase {
     XCTAssertEqual(frames.offer(sample(sharpness: 0.05), text: top, id: 3, at: 2), .replaced(old: 1, new: 3))
     XCTAssertEqual(frames.frameIDs, [3, 2], "The sharper top view stays first: reading order, thumbnail and neighbor context.")
   }
+  func testWhileCheckingACloserViewIsKeptAndAFullPageMakesRoom() {
+    var frames = PageFrames()
+    let whole = text(["1. Solve for x in 2x + 3 = 11", "2. Find the slope of the line", "Show all of your work clearly"])
+    let closeUp = text(["2. Find the slope of the line", "Show all of your work clearly"])
+    _ = frames.offer(sample(linePixels: 30), text: whole, id: 1, at: 0)
+    XCTAssertEqual(frames.offer(sample(linePixels: 45), text: closeUp, id: 2, at: 1), .duplicate, "Normally it loses question 1.")
+    frames.keepCloserViews = true
+    XCTAssertEqual(frames.offer(sample(linePixels: 45), text: closeUp, id: 3, at: 2), .added(3), "Asked for a closer look.")
+    XCTAssertEqual(frames.offer(sample(linePixels: 31), text: closeUp, id: 4, at: 3), .duplicate, "Not clearly better.")
+    var full = PageFrames()
+    for index in 0..<6 { _ = full.offer(sample(content: Double(index) * 0.3, sharpness: index == 2 ? 0.001 : 0.02), text: FrameText(), id: index, at: Double(index)) }
+    XCTAssertEqual(full.offer(sample(content: 3), text: FrameText(), id: 9, at: 9), .full)
+    full.evictWhenFull = true
+    XCTAssertEqual(full.offer(sample(content: 3), text: FrameText(), id: 9, at: 9), .replaced(old: 2, new: 9), "The blurriest view goes.")
+  }
+
   func testWithoutReadableLinesViewsAreToldApartByImage() {
     var frames = PageFrames()
     XCTAssertEqual(frames.offer(sample(content: 0.05), text: FrameText(), id: 1, at: 0), .added(1))

@@ -290,9 +290,9 @@ struct SolverClient: AITransport {
   Fill the fields in order:
   blurry: numbers of photos that add nothing because they are too blurred, dark, distant or covered to read any text
   that another photo does not show more clearly. Usually empty.
-  otherSheet: numbers of photos that show a different sheet. The sheet you check is the one most photos show; on a tie,
-  the one in the last photo, which the wearer is looking at now. Compare question numbers, wording and layout, not the
-  look of the paper. Ignore blurry and otherSheet photos from here on.
+  otherSheet: numbers of photos that show a different sheet. When a REFERENCE photo is given, the sheet you check is the
+  REFERENCE sheet. Otherwise it is the one most photos show; on a tie, the one in photo 1. Compare question numbers,
+  wording and layout, not the look of the paper. Ignore blurry and otherSheet photos from here on.
   questions: in printed order, every question and lettered or numbered subpart on the sheet, and every figure, graph or
   table they use.
     label: as printed, e.g. "3(b)", "Q4", "Figure 2"; for an unlabeled item, a few words such as "top problem".
@@ -311,7 +311,7 @@ struct SolverClient: AITransport {
   first (the printed label, or the top, middle or bottom of the sheet, the table, the graph), then one fix: look closer,
   hold still, move your hand away, tilt the sheet away from the light, find more light, or show the top or bottom of the
   sheet. Choose the fix that clears the most problems. Never mention photos, images or pixels; the wearer cannot see
-  them. If every photo shows a different sheet than the wearer should be checking, say "Turn to the next sheet."
+  them. If every photo shows a different sheet than the one you check, say "Turn to the right sheet."
   Examples: "Look closer at question 4(c), and hold still." "Show the bottom of the sheet." "Move your hand off
   question 2." "Tilt the sheet away from the light over the table." "Find more light; the whole sheet is too dark."
   Return only the JSON.

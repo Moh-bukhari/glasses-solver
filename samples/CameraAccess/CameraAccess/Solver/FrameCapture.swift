@@ -127,6 +127,12 @@ struct PageFrames: Sendable {
   let configuration: Configuration
   /// The packet names questions with words ("Question 3"): bare numbers are lists inside a question, not new questions.
   var headingsOnly = false
+  /// After the page check asked for a closer or steadier look: a clearly better frame of a kept view is kept as another
+  /// view even when it shows less of it (a close-up of one question), instead of being dropped as a duplicate.
+  var keepCloserViews = false
+  /// While pages are checked, a full page makes room for a new view by dropping its weakest frame, so a part the check
+  /// asked for can always be added.
+  var evictWhenFull = false
   private(set) var kept: [Kept] = []
   private(set) var lastNew: TimeInterval = 0
   private var previous: PageSample?
@@ -176,8 +182,12 @@ struct PageFrames: Sendable {
       let old = kept[index]
       let keepsText = old.signature.isEmpty
         || Double(old.signature.intersection(signature).count) >= 0.9 * Double(old.signature.count)
-      guard quality >= old.quality + configuration.betterBy, old.labels.subtracting(labels).isEmpty, keepsText else {
-        if newLabels.isEmpty { return .duplicate }
+      let better = quality >= old.quality + configuration.betterBy
+      guard better, old.labels.subtracting(labels).isEmpty, keepsText else {
+        // A closer look is a new view only if it beats every kept frame of this view (not just the wide one it crops).
+        let best = sameViews.map { kept[$0].quality }.max() ?? old.quality
+        let closer = keepCloserViews && quality >= best + configuration.betterBy
+        if newLabels.isEmpty && !closer { return .duplicate }
         return append(candidate, at: time)
       }
       var replacement = candidate
@@ -213,7 +223,12 @@ struct PageFrames: Sendable {
   }
 
   private mutating func append(_ candidate: Kept, at time: TimeInterval) -> Decision {
-    guard kept.count < configuration.maxFrames else { return .full }
+    guard kept.count < configuration.maxFrames else {
+      guard evictWhenFull, let weakest = kept.indices.min(by: { kept[$0].quality < kept[$1].quality }) else { return .full }
+      let old = kept.remove(at: weakest).id
+      kept.append(candidate); lastNew = time
+      return .replaced(old: old, new: candidate.id)
+    }
     kept.append(candidate); lastNew = time
     return .added(candidate.id)
   }

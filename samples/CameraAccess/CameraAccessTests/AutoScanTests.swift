@@ -759,6 +759,42 @@ final class AutoScanTests: XCTestCase {
     model.handle(.finish); await waitUntil { model.phase == .finished }
     XCTAssertEqual(saver.frameCounts, [2]); model.stop()
   }
+  func testACloserLookTheCheckAskedForIsCheckedAgain() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: frameSample()), voice = FakeScanVoice()
+    let checker = FakePageChecker([.success(.unclear("Look closer at question 2, and hold still."))])
+    let model = makeModel(camera, analyzer, FakePageSolver(), FakeSolutionSaver(), capture: .frames, voice: voice, checker: checker)
+    await analyzer.setText(text(viewA))
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await show(camera) { voice.messages.contains("Page 1: Look closer at question 2, and hold still.") }
+    // A close-up of question 2: the same view, larger text, but it no longer shows question 1.
+    await analyzer.setLinePixels(45); await analyzer.setText(text(["2. Find the slope of the line", "Show all of your work clearly"]))
+    try await show(camera) { model.phase == .awaitingNext }
+    let checks = await checker.photoCounts
+    XCTAssertEqual(checks, [1, 2], "The close-up is kept and the page is checked again.")
+    XCTAssertEqual(model.pages.first?.frames.count, 2); model.stop()
+  }
+  func testARetakeIsCheckedAgainstThePageItReplaces() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: frameSample()), voice = FakeScanVoice()
+    let checker = FakePageChecker([.success(.clear),
+      .success(PageVerdict(clear: false, say: "Turn to the right sheet.", dropped: [1], wrongSheet: true))])
+    let model = makeModel(camera, analyzer, FakePageSolver(), FakeSolutionSaver(), capture: .frames, voice: voice, checker: checker)
+    await analyzer.setText(text(viewA))
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await show(camera) { model.phase == .awaitingNext }
+    let original = try XCTUnwrap(model.pages.first?.id)
+    model.handle(.previous); XCTAssertEqual(model.phase, .seeking) // 👈 retake page 1
+    await analyzer.setContent(0.5); await analyzer.setText(text(viewB)) // but another sheet is in view
+    try await show(camera) { voice.messages.contains("That's a different sheet. Turn to page 1.") }
+    XCTAssertEqual(model.pages.map(\.id), [original], "Another sheet is never saved as page 1.")
+    await analyzer.setContent(0.05); await analyzer.setText(text(viewA)) // page 1 again
+    try await show(camera) { model.phase == .awaitingNext }
+    XCTAssertEqual(model.pages.count, 1); XCTAssertNotEqual(model.pages.first?.id, original)
+    let references = await checker.references
+    XCTAssertEqual(references, [false, true, true], "Retake checks include an earlier photo of the page.")
+    model.stop()
+  }
   func testAfterThreeUnclearChecksThePageWaitsForTheWearer() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
     let analyzer = FakePageAnalyzer(sample: frameSample()), voice = FakeScanVoice()
@@ -774,8 +810,7 @@ final class AutoScanTests: XCTestCase {
       "\(voice.messages)")
     XCTAssertTrue(voice.messages.contains("Page 1 still isn't clear: Look closer at question 2. Thumbs-right keeps it."),
       "\(voice.messages)")
-    await analyzer.setContent(0.95); await analyzer.setText(text(viewC)) // more views, but no fourth automatic check
-    try await show(camera, limit: 10) { false }
+    try await show(camera, limit: 6) { false } // nothing new: no fourth check of the same photos
     let checks = await checker.photoCounts
     XCTAssertEqual(checks.count, 3); XCTAssertEqual(model.phase, .seeking)
     model.handle(.next) // 👉 keeps the page as it is
@@ -1160,6 +1195,8 @@ private actor FakePageAnalyzer: PageAnalyzing {
   func readText(_ image: CGImage) async throws -> FrameText { reads += 1; return text }
   init(sample: PageSample, rejectFirstStill: Bool = false) { self.sample = sample; self.rejectFirstStill = rejectFirstStill }
   func setGesture(_ gesture: HandGesture?) { sample.gesture = gesture }
+  /// Text this many pixels tall: a closer look than `frameSample()`'s 30 px.
+  func setLinePixels(_ value: Double) { sample.linePixels = value }
   func rejectNextStill() { rejectFirstStill = true }
   /// Different writing in view: a new page for the page-turn gate.
   func setContent(_ value: Double) {
@@ -1218,9 +1255,11 @@ private actor FakePageSolver: PageSolving {
 private actor FakePageChecker: PageChecking {
   private var verdicts: [Result<PageVerdict, any Error>]
   private(set) var photoCounts: [Int] = []
+  /// Whether each check got an earlier photo of the page being retaken.
+  private(set) var references: [Bool] = []
   init(_ verdicts: [Result<PageVerdict, any Error>] = []) { self.verdicts = verdicts }
-  func check(_ photos: [Data], page: Int, configuration: SolverConfiguration) async throws -> PageVerdict {
-    photoCounts.append(photos.count)
+  func check(_ photos: [Data], page: Int, reference: Data?, configuration: SolverConfiguration) async throws -> PageVerdict {
+    photoCounts.append(photos.count); references.append(reference != nil)
     return verdicts.isEmpty ? .clear : try verdicts.removeFirst().get()
   }
 }
