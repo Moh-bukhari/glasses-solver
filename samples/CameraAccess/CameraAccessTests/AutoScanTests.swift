@@ -258,7 +258,10 @@ final class AutoScanTests: XCTestCase {
     MockDeviceKit.shared.permissions.setRequestResult(.camera, result: .granted)
     let camera = AutoScanCamera(wearables: Wearables.shared)
     var receivedFrame = false
+    var commands: [ScanCommand] = [], notices: [String] = []
     camera.onFrame = { _ in receivedFrame = true }
+    camera.onCommand = { commands.append($0) }
+    camera.onNotice = { notices.append($0) }
     let file = FileManager.default.temporaryDirectory.appendingPathComponent("scan-fixture-\(UUID()).jpg")
     try paperImage().jpegData(compressionQuality: 0.95)!.write(to: file)
     glasses.services.cameraCapture.setCapturedPhoto(fileURL: file)
@@ -270,35 +273,7 @@ final class AutoScanTests: XCTestCase {
       // Still require a delivered SDK frame; do not substitute a fake frame or skip this gate.
       await waitUntil(timeout: 20) { receivedFrame }
       XCTAssertTrue(receivedFrame, "The preview must deliver images before automatic quality checks can run.")
-      let captured = try await camera.capture()
-      XCTAssertNotNil(UIImage(data: captured))
-      camera.stop()
-      await MockDeviceKit.shared.disable()
-      try? FileManager.default.removeItem(at: file)
-    } catch {
-      camera.stop()
-      await MockDeviceKit.shared.disable()
-      try? FileManager.default.removeItem(at: file)
-      throw error
-    }
-  }
-  func testGlassesButtonsReachTheScanWithMockGlasses() async throws {
-    try? Wearables.configure()
-    MockDeviceKit.shared.enable()
-    let glasses = try MockDeviceKit.shared.pairGlasses(model: .rayBanMeta)
-    glasses.powerOn(); glasses.unfold(); glasses.don()
-    await waitUntil { Wearables.shared.devices.contains(glasses.deviceIdentifier) }
-    MockDeviceKit.shared.permissions.set(.camera, .granted)
-    MockDeviceKit.shared.permissions.setRequestResult(.camera, result: .granted)
-    let camera = AutoScanCamera(wearables: Wearables.shared)
-    var commands: [ScanCommand] = []
-    var notices: [String] = []
-    camera.onCommand = { commands.append($0) }
-    camera.onNotice = { notices.append($0) }
-    let video = try XCTUnwrap(Bundle.main.url(forResource: "plant", withExtension: "mp4"))
-    glasses.services.camera.setCameraFeed(fileURL: video)
-    do {
-      try await camera.start()
+      // One mock session per test process: glasses buttons are checked here, before the full photo.
       await waitUntil(timeout: 25) { camera.inputsActive }
       XCTAssertTrue(camera.inputsActive, "Glasses buttons never activated. Notices: \(notices)")
       glasses.services.input.select()
@@ -308,11 +283,16 @@ final class AutoScanTests: XCTestCase {
       glasses.services.input.capture(pressType: .hold)
       await waitUntil { commands.count == 3 }
       XCTAssertEqual(commands, [.finish, .next, .retakeLast])
+      // The full-resolution photo must still work with Inputs attached.
+      let captured = try await camera.capture()
+      XCTAssertNotNil(UIImage(data: captured))
       camera.stop()
       await MockDeviceKit.shared.disable()
+      try? FileManager.default.removeItem(at: file)
     } catch {
       camera.stop()
       await MockDeviceKit.shared.disable()
+      try? FileManager.default.removeItem(at: file)
       throw error
     }
   }
