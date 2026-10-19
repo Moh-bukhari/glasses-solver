@@ -1,10 +1,8 @@
-# Glasses Solver 2.5: best models, page-by-page check, start from a shortcut, control everything with your thumb
+# Glasses Solver 2.6: take each page with the capture button, checked as you go, one folder per packet
 
-You don't need to take out your phone during a scan. Start it with a shortcut (Action button, Back Tap, Control Center or Siri), scan page by page by looking at each page, and use three thumb gestures.
+The glasses' video is too blurry for small print, but the photos you take with the **capture button** are sharp. In 2.6 you photograph each page yourself. The Meta AI app imports every photo into your iPhone's Photos; Glasses Solver picks it up right away, checks that every question on the page can be read, and tells you through the glasses: "Page 1 is clear. Take page 2." or what to photograph again. Each page is solved as soon as the next one is saved, so the PDF is ready moments after you finish. Everything for one packet goes into one folder in the Files app.
 
-2.5 uses the most accurate models with their paid fast modes. Claude Opus 5.5 reads printed numbers best and, in fast mode, answers quickest; GPT-6 Astra on OpenAI's Ultrafast is used if you only have an OpenAI key. Every page is checked before you move on: while you look at a page, its photos go to that model, which checks that every question on it can be read and solved. You hear "Page 1 is clear. Turn the page." If something can't be read, you hear what to show again ("Page 1: the bottom line is cut off; show it"), still at that page. After your thumbs-up, all pages are solved at once and the PDF opens, with typeset math. The app no longer tries to work out question numbers itself; the AI does that when it solves.
-
-The app keeps the clearest moments of the live camera, several per page, so there's no pause between photos. Directions play quietly through the glasses only. Voice commands and glasses buttons are off by default.
+2.6 starts fresh: your earlier PDFs moved to **Files › On My iPhone › Glasses Solver › Old solutions** (delete that folder if you don't need them), and the old unfinished pages were cleared.
 
 ## Install from Windows
 
@@ -15,7 +13,31 @@ The app keeps the clearest moments of the live camera, several per page, so ther
    - Enter your **Anthropic (Claude)** key for the best results, and your OpenAI key if you have one. With a Claude key saved, Claude solves and checks pages. Defaults: **Claude Opus 5.5** (`claude-opus-5-5`) and **GPT-6 Astra** (`gpt-6-astra`).
    - **Fast processing** (on) uses Claude fast mode / OpenAI Ultrafast: the same answers sooner, at several times the price. If your account can't use them, the app falls back by itself.
    - Save.
-5. Make sure the glasses are connected in Meta AI and Developer Mode is on. Run one scan from the app first, so you can allow camera access on the phone.
+5. In the **Meta AI** app, open your glasses' settings and turn on **Auto-import** for photos and videos (Media). If Meta AI offers **Wi-Fi Aware** or faster imports, turn it on. Turn off any automatic crop, straightening or enhancement of photos if you see one.
+6. Start a scan once and allow **Full Access** to Photos when asked (Limited access hides new photos from the glasses). If you chose Limited: Settings › Privacy & Security › Photos › Glasses Solver › Full Access.
+7. Live-frame scanning (Settings › Capture) still needs the glasses connected in Meta AI with Developer Mode on.
+
+## Scan a packet with the capture button (default)
+
+1. Tap **Start scanning** (or run the Start Glasses Scan shortcut). You hear "Ready. Take a photo of page 1 with the capture button."
+2. Photograph page 1 with the capture button on the glasses: one photo of the whole page, close enough to fill the view with the sheet, plus a close-up of any small print, tables or graphs. Good light helps most.
+3. Each photo reaches the phone through Meta AI, usually within seconds; the screen shows how long the last one took. You hear "Checking page 1." and then:
+   - "**Page 1 is clear. Take page 2.**" The page is saved and you move on.
+   - Or what to photograph, for example "**Page 1: Take a closer photo of question 4(c).**" Take that photo; the page is checked again with all its photos.
+4. Photographed page 2 before hearing that page 1 is clear? That photo waits: you hear "Page 1 isn't clear yet… Go back to it", and once page 1 is clear, page 2 continues from the photo you already took. A late extra photo of page 1 is recognized and doesn't become a new page.
+5. **Commands are photos of your hand.** Make a fist with the thumb out, hold it close in front of the glasses, and press the capture button:
+   - 👍 **thumb up**: done, solve everything. If the last page isn't clear yet you hear why; a second thumbs-up photo solves anyway.
+   - 👉 **thumb to your right**: keep this page as it is and go on.
+   - 👈 **thumb to your left**: retake the page before.
+   The phone has the same buttons (**Done · Solve**, **Keep this page as it is**), and there is a **Finish Glasses Scan** shortcut for Siri or the Action button.
+6. The PDF opens on the phone. It is saved with every photo in **Files › On My iPhone › Glasses Solver › Solutions › <date, time and title>**: `Solutions.pdf`, `Page 1.jpg`, `Page 2 (1).jpg`, `Page 2 (2).jpg`, …
+
+Keep the phone unlocked with Glasses Solver open while you scan (the screen stays on). If no photo arrives after a minute, open Meta AI's gallery once so it imports, then come back to Glasses Solver. After 10 minutes without a new photo, the pages you took are solved.
+
+## Live frames (hands-free, blurrier)
+
+Settings › Capture › **Live frames** keeps the clearest moments of the glasses' video instead, controlled with hand gestures in front of the glasses. It needs no button presses but the video is much blurrier than photos.
+
 
 ## Set up the start shortcut (once)
 
@@ -31,9 +53,9 @@ If the shortcut isn't listed, make a personal shortcut with the **Open URLs** ac
 
 The phone must be unlocked, because the app has to be on screen for the glasses camera. Put the phone face up on the desk, start with the shortcut, and leave it there. The screen stays on while you scan.
 
-## Scan a packet
+## Scan a packet with live frames
 
-1. Start with the shortcut (or tap **Start scanning**). You hear "Ready. Look at page 1 closely, part by part, top to bottom."
+1. Choose Settings › Capture › Live frames, then start with the shortcut (or tap **Start scanning**). You hear "Ready. Look at page 1 closely, part by part, top to bottom."
 2. Look closely at page 1: about a hand's width of text at a time, close enough that the small printed writing is sharp. Hold still for about half a second at each part, and go all the way to the bottom of the sheet. Quiet directions (left / right / tilt / closer / hold still) guide you. "Move a little closer: the printed text is too small to read" means that view wasn't kept.
 3. When you pause, you hear "Checking page 1." A couple of seconds later:
    - "**Page 1 is clear. Turn the page.**" The page is saved.
@@ -45,7 +67,7 @@ If a page check can't run (no internet, or a key or billing problem), you hear i
 
 Prefer one big photo per page? Settings → Capture → **Full-resolution photo**. It is sharper for a whole page at arm's length, but each photo pauses the camera and takes several seconds.
 
-## Hand gestures
+## Hand gestures (live frames)
 
 Make a fist with your thumb straight out. Hold it in front of you, in the middle of your view, about a forearm's length away, for about one second. Lower your hand before the next gesture; gestures are about 2 seconds apart.
 
@@ -75,17 +97,18 @@ Make a fist with your thumb straight out. Hold it in front of you, in the middle
 
 - **Check each page before the next** (on): Claude Opus 5.5 (or GPT-6 Astra without a Claude key) checks each page while you look at it.
 - **Fast processing** (on): paid speed lanes for checks and solving; turn off to pay standard prices.
-- **Solve pages while scanning** (off): turn it on to solve each page in the background once the next page is saved, so the PDF is ready sooner after your thumbs-up.
+- **Solve pages while scanning** (off, live frames only): turn it on to solve each page in the background once the next page is saved. Capture-button photos are always solved as you go.
 - **Provider:** one provider is fastest. **Both · cross-check** solves every page with both providers and then reconciles the answers; it's slower and costs twice as much.
 
 ## If something goes wrong
 
-- **Leaving the app or locking the phone** pauses the camera ("Scanning paused"). Solving continues as long as iOS allows. Run the shortcut again (or tap Continue) to keep scanning.
+- **No photo arrives (capture button):** check Meta AI's Auto-import setting and that Glasses Solver has Full Access to Photos (the app shows a button to its Settings page). Opening Meta AI's gallery imports waiting photos; then switch back. Photos imported while Glasses Solver was in the background are picked up when you return.
+- **Leaving the app or locking the phone** with live frames pauses the camera ("Scanning paused"). A capture-button scan keeps going and catches up when you're back. Solving continues as long as iOS allows. Run the shortcut again (or tap Continue) to keep scanning.
 - **Forgotten scan:** after 5 minutes with no new page and no gesture, the camera stops by itself. Your pages are kept.
 - **Key, billing, or model errors:** shown right away with no retries. Fix them in Settings and finish again (this one needs the phone).
 - **No API key:** scanning still saves pages but tells you a key is missing.
 - **Gesture not recognized:** hold the hand closer and more centered, fingers curled tight, thumb straight. Check that **Hand gestures** is on in Settings.
-- **Fixing a page after the PDF:** the solved pages stay until you start a new packet. Tap **Retake** under a page; when it's saved, give 👍 to rebuild the PDF. Only that page and its neighbors are solved again. Every PDF's original photos stay in **Files → On My iPhone → Glasses Solver → Solutions**.
+- **Fixing a page after the PDF:** the solved pages stay until you start a new packet. Tap **Retake** under a page; when it's saved, give 👍 to rebuild the PDF. Only that page and its neighbors are solved again. Each finished packet is its own folder in **Files → On My iPhone → Glasses Solver → Solutions**, named by date, time and title.
 - **Glasses buttons:** Meta's experimental Inputs didn't reach the app on your glasses, so 2.1 turns them off. You can turn them on again in Settings to try. A single tap on the touchpad still pauses or resumes the glasses, and touch-and-hold stops the glasses session.
 
 ## Limits and privacy
@@ -102,9 +125,10 @@ GitHub's macOS build compiles the iPhone app and runs simulator tests for:
 
 - **Capture and solving:** the coordinator, including the gesture-only flows: next, previous, retaking an earlier page, asking again for an unreadable page, solving without it, retrying after a failure, and the start shortcut.
 - **Gestures:** the classifier for all four thumb directions, diagonal and paper-grip rejection, and the timing gate.
+- **Capture-button photos (2.6):** photos are paged by the check and solved as you go, a photo of the next sheet waits until the page is clear, a late photo of the page before never starts a page, thumbs-up and thumbs-right photos are commands, finishing on an unclear page warns once, no photo is used twice, Photos access is required, and folder names (with fake photos and AI answers).
 - **Page check:** a page is saved only after the check says it is clear, unclear pages ask again, photos of another sheet are dropped, thumbs-up checks the open page first, and a check that can't run never blocks the scan (with fake AI answers).
 - **AI responses:** streaming parsing for both providers, retries and repairs, request formats (including the fast check model and its fallback), and the PDF.
 - **Meta mock glasses:** preview frames and full-photo capture.
 - **Shortcut:** the build checks that the Start Glasses Scan shortcut is in the app.
 
-Still to check on your device: real glasses, real hand gestures (especially thumb left and right), the shortcut on your phone, audio routing, paid API answers, and how fast and how strict the page check is.
+Still to check on your device: how fast Meta AI imports capture-button photos while you wear the glasses, real glasses, real hand gestures (especially thumb left and right), the shortcut on your phone, audio routing, paid API answers, and how fast and how strict the page check is.
