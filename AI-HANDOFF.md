@@ -2,7 +2,7 @@
 
 Start here when continuing this project. This file records the product intent, current implementation, operating instructions, decisions, and unfinished work; no earlier chat is required.
 
-**Snapshot updated:** 2026-10-19 UTC. **App:** 2.0, build 6, on branch `claude/pensive-allen-ggkllj`, which is based on `solver-app`. **Verified app commit:** see §3; it is the latest commit with green CI. Later documentation commits do not imply a new app build. Recheck the branch and CI before relying on this snapshot.
+**Snapshot updated:** 2026-10-19 UTC. **App:** 2.0, build 6, on branch `claude/pensive-allen-ggkllj`, which is based on `solver-app`. **Verified app commit:** `f963ee936004753ddfbf4c18e4f8262a3accc6ed` (CI run 39197936367, build and verify green, 89 tests, 0 failures). Later documentation commits do not imply a new app build. Recheck the branch and CI before relying on this snapshot.
 
 ## 1. Find the right branch and read these files
 
@@ -61,7 +61,16 @@ Preserve these decisions:
 | PDF | JPEG-backed source previews decoded off the main actor; coverage summary; up to 300 solution pages |
 | Physical glasses, real gestures, audio routing, live API latency and accuracy | **Not verified** in the development environment |
 
-Evidence: CI runs from this branch are listed under [Build Glasses Solver IPA](https://github.com/Moh-bukhari/glasses-solver/actions/workflows/build-solver.yml?query=branch%3Aclaude%2Fpensive-allen-ggkllj). Use the latest run where **both** verify and build passed, and check that its head SHA matches the commit you install. The logic-only suites also pass on Linux under Swift 6.3, but that run is supporting evidence only and doesn't replace CI.
+Evidence:
+
+- **CI run.** [Run 39197936367](https://github.com/Moh-bukhari/glasses-solver/actions/runs/39197936367) on `f963ee9`. Both the build and verify jobs passed: **89 tests, 0 failures**.
+  - AutoScanTests: 46. These include the Meta mock-glasses test covering preview frames, Inputs activation and button mapping, touchpad pause/resume notices, and the full-resolution photo.
+  - PageSolvingTests: 21. HandGestureTests: 20. GlassesInputTests: 2.
+- **IPA artifact.** `GlassesSolver-IPA` (ID 12162622480, sha256 `a48b478a…`) [from that run](https://github.com/Moh-bukhari/glasses-solver/actions/runs/39197936367/artifacts/12162622480). Artifacts expire 2027-01-17.
+- **Mock probe.** The Meta mock reports "Critical error, the stream should end" when the stream restarts after a full photo, so the app falls back to a full reconnect; see priority 5.
+- **Later runs.** Check later runs on this branch before installing a newer commit. A run counts only when both jobs passed and its head SHA matches the commit.
+- **Linux.** The logic-only suites also pass on Linux under Swift 6.3. That is supporting evidence, not a replacement for CI.
+- **Review.** An adversarial multi-lens review (compile, coordinator, SDK, pipeline, tests, requirements) was run, and every confirmed finding is fixed at the verified commit.
 
 History: the user confirmed that 1.x glasses capture and PDF generation worked. They then reported that **"solving" never produced a PDF**. The cause was the latency of a sequential, non-streaming multi-stage pipeline (§6), not a deadlock.
 
