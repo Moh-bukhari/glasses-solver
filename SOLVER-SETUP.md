@@ -35,9 +35,12 @@ You control everything with a thumbs-up or clicks on the glasses. Voice commands
 | Press the capture button once | Next page now (for look-alike pages), or take the current view as soon as the writing is clear |
 | Hold the capture button | Retake the last page |
 | Single tap on the touchpad | Reserved by the glasses: pauses or resumes. Scanning waits while paused and continues when you tap again |
+| Touch-and-hold on the touchpad | Reserved by the glasses: **stops** the glasses session. Avoid it; to retake, hold the capture button instead |
 
 - **Gestures** are recognized on the iPhone from the glasses camera. A hand holding or resting on the paper is ignored, and the app never photographs a raised command hand.
-- **Glasses buttons** use Meta's experimental Inputs feature. If your glasses or Meta AI version doesn't allow it, the app says so once and the thumbs-up still works.
+- **Glasses buttons** use Meta's experimental Inputs feature. After each photo they take a moment to reconnect, so wait for "Page N saved" before pressing. If your glasses or Meta AI version doesn't allow it, the app says so once and the thumbs-up still works.
+- **Look-alike pages:** if a new page looks too much like the last one, the turn isn't detected and you'll hear "If this is a new page, press the capture button". Press it once, or tap **Next page now**.
+- **Voice commands:** if you had turned them on in 1.x, 2.0 turns them off once so the microphone isn't used.
 
 ## Spoken directions
 
@@ -51,11 +54,12 @@ You control everything with a thumbs-up or clicks on the glasses. Voice commands
 
 ## If something goes wrong
 
-- **A page can't be read:** the message names the page. Pause, tap **Retake** under that page (or **Replace photo**), then finish again. Pages already solved are kept and are not sent again.
+- **A page can't be read:** you'll hear about it during scanning, and the message names the page. Tap **Retake** under that page (or **Replace photo**), then tap **Done**. Finishing again without a new photo just resends the same photo. Pages already solved are kept and aren't sent again.
 - **Network or a busy provider:** requests are retried automatically, at most twice. If a page still fails, finish again: only the failed pages are solved again.
 - **Key, billing, or model errors:** shown right away, with no retries. Fix them in Settings and finish again.
-- **Leaving the app:** switching tabs no longer cancels solving. Leaving the app pauses the camera, and solving keeps going for as long as iOS allows. Keep the app open while scanning.
-- **Retake after the PDF:** after a PDF is saved, the pages are cleared and the next Start begins a new packet. Your photos are kept with the PDF in **Files → On My iPhone → Glasses Solver → Solutions**, and you can re-import any of them with **Add a paper photo**.
+- **No API key:** Start still saves pages but tells you a key is missing. Finishing opens Settings.
+- **Leaving the app:** switching tabs or tapping Pause doesn't cancel solving. Leaving the app pauses the camera, and you'll hear "Scanning paused". Solving keeps going for as long as iOS allows, and the PDF can still be made if the phone locks. Keep the app open while scanning.
+- **Fixing a page after the PDF:** the solved pages stay until you start a new packet. Tap **Retake** or **Replace photo** under a page, then **Done** to rebuild the PDF; only that page and its neighbors are solved again. **Start a new packet** clears them. Every PDF's original photos stay in **Files → On My iPhone → Glasses Solver → Solutions**.
 
 ## Limits and privacy
 

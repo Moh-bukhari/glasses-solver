@@ -25,4 +25,7 @@ Meta's SDK resolves a keychain access group during initialization. Simulator tes
 - Reasoning/thinking tokens count against output limits. A 16k cap can truncate before any visible output; size limits for reasoning models (OpenAI recommends ≥25k) instead of relying on a repair round.
 - A view's `onDisappear` in a TabView fires on every tab switch. Never tie paid background work to view lifetime; stop only the camera there.
 - The default `.soloAmbient` audio session is muted by the Silent switch. Cues that must reach the glasses need `.playback`; check the route to keep them off the phone loudspeaker.
+- Complete file protection makes draft photos unreadable about ten seconds after the phone locks. Background solving and PDF creation need until-first-unlock protection, or they fail exactly when the user pockets the phone.
+- A test that reads a fake's own counter or sends frames inside a timing guard passes vacuously. Assert the model's observable behavior and drive it past the gate it claims to test.
+- Two Meta MockDeviceKit pairings in one test process: the second session never delivered preview frames. Keep one mock-glasses session per process and check several behaviors inside it.
 - On Ray-Ban Meta, a single touchpad tap and tap-and-hold are reserved by the glasses (pause/resume, stop) and never reach the app. Use double-tap and capture-button presses via Inputs, and keep a non-button path (hand gesture, screen) because Inputs is experimental and may be gated.

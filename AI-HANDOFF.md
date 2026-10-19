@@ -46,7 +46,8 @@ Preserve these decisions:
 - **One provider by default; never a silent downgrade.** Cross-check mode uses both providers and must not quietly fall back when a key is missing or one provider fails.
 - **Coverage.** Each page answer includes a checklist of every visible label. Every label is solved or explicitly skipped as belonging to the previous page. Unresolved items show as NEEDS REVIEW. This is not proof of mathematical correctness.
 - **No partial PDFs.** A failed page stops PDF creation with page-specific retake or retry instructions. Solved pages stay cached, and a retry re-solves only the failed ones.
-- **Draft retention.** Saved pages survive errors, pauses and app restarts, and a replacement never deletes the old photo first. After a successful PDF the draft is cleared; the originals live in the Solutions folder, and the next Start begins a new packet.
+- **Draft retention.** Saved pages survive errors, pauses and app restarts, and a replacement never deletes the old photo first. After a successful PDF the packet stays and is marked solved (`ScanDraft/solved`), so one page can be retaken and the PDF rebuilt from cached answers. Start, or a new photo, begins a new packet. The originals are also copied into the Solutions folder.
+- **Lock-safe drafts.** Draft files use until-first-unlock file protection, and 1.x drafts are migrated on load, so solving and PDF creation survive a locked phone.
 
 ## 3. Current status and evidence
 
@@ -80,13 +81,15 @@ History: the user confirmed that 1.x glasses capture and PDF generation worked. 
 3. Changed writing re-arms capture automatically. To force it, press the capture button once (next page / take now).
 4. Meanwhile, page N−1 is solved in the background as soon as page N is saved. Thumbnails show waiting/queued/solving/solved/failed.
 5. Finish with a thumbs-up (held about 1 s), a touchpad double-tap, a capture-button double-press, or **Done · Solve**. To retake the last page: thumbs-down or hold the capture button.
-6. Finish solves the last page, plus any page still queued, failed or in flight. The PDF opens automatically, and then the draft is cleared.
+6. Finish solves the last page, plus any page still queued, failed or in flight. Then it re-solves once any page whose skipped item no earlier page solved. The PDF opens automatically; the packet stays fixable until the next Start.
 
 ### Correct and recover
 
 - **Middle pages.** Pause, then use the queue's **Retake**, **Replace photo** or **Remove**. Only the pages whose context changed are re-solved.
-- **Unreadable page.** It stops with "Page N: …"; replace that page and finish again.
+- **Unreadable page.** It is announced during scanning and stops Finish with "Page N: … Retake that page with the Retake button…". Resending the same photo is pointless.
 - **Transient errors.** Retried automatically, twice. Finishing again re-solves only failed pages.
+- **After the PDF.** Retake or Replace a page, then Done: only that page and the neighbors whose context changed are re-solved.
+- **No key.** Start announces that pages will only be saved. A failed Finish is spoken and reopens Settings every time.
 - **Tab switch or backgrounding.** Stops the camera, never solving. A background-task assertion buys extra time; a suspended request fails and can be retried.
 
 ## 5. How the capture workflow works
@@ -157,31 +160,35 @@ flowchart LR
 **Request**
 
 - One request per page, with labeled images (PREVIOUS context / PRIMARY / NEXT context) and the page task.
-- The page solves every item that **begins** on it, using the next page for continuations. Items that began on the previous page, or a repeated or overlapping photo of it, go into `skipped`.
+- **Ownership rule:** every item (a question, or each lettered or numbered subpart) belongs to the page where its own label first appears.
+  - A page uses PREVIOUS for shared stems and data, and NEXT only to finish an item cut off at its bottom.
+  - It lists an item in `skipped` only if that item's own label already appears on PREVIOUS (a continuation or an overlapping photo). A subpart is never skipped just because its parent began earlier.
+- **Orphaned skips:** before combining, `PagePlan.orphanedSkips` finds skipped labels that no earlier page solved. That page is re-solved once with `mustSolve`, and validation then requires those labels among its solutions.
 - Output schema (strict; all fields required): `readable`, `retake`, `title`, `checklist[]`, `solutions[{label, problem, steps[], answer, check, status, reviewNote, sourcePages[]}]`, `skipped[{label, reason}]`.
 
 **Validation and repair**
 
 - An unreadable page throws page-specific retake instructions; it is never repaired.
-- Labels must be unique. Every answer needs non-empty steps, an answer and a check. Any status other than solved needs a note.
-- Every checklist label must be either solved or skipped.
-- One repair is allowed, raising the token limit from 32k to 48k.
+- Labels must be unique.
+- Solved items need non-empty steps, an answer and a check. Unresolved items need a review note; empty fields print as "—".
+- Every checklist label must be solved or skipped. A parent number counts as covered by its answered subparts ("3" by "3(a)", "3(b)").
+- One repair is allowed. The token limit rises from 32k to 48k only for models that accept it (`SolverClient.outputLimit`); older IDs stay at 32k.
 
 **Cross-check mode**
 
 - Lead and peer solve in parallel; then the lead reconciles both drafts against the photos.
-- The reconciled answer must cover every label either draft solved.
+- The reconciled answer must cover every label either draft solved. Labels are compared loosely, so "Q3(b)" matches "3(b)".
 
 **Retries and concurrency**
 
 - Retries are capped at two, with backoff of 2 s and 6 s, or `retry-after` clamped to 1–20 s.
-- Retried: HTTP 408/409/429/5xx/529, SSE error events, a stream that ends early, and `URLError` timeouts or lost connections.
-- Never retried: 400/401/402/403/404/413, spend-cap or insufficient-quota 429s, and refusals.
+- Retried: HTTP 408/409/429 and every 5xx except 501/505 (including 529 and Cloudflare 52x); a stream that ends early; transient in-stream errors (overloaded, api, timeout, rate-limit or server errors); and lost or refused connections.
+- Never retried: 400/401/402/403/404/413, spend-cap or insufficient-quota 429s, refusals, non-transient in-stream errors (e.g. `invalid_prompt`), and idle timeouts. An idle timeout comes after 10 minutes of silence and would only repeat.
 - `AsyncLimiter` allows at most 4 concurrent provider requests.
 
 **Combine**
 
-- Results are joined in page order, and a repeated label+problem is kept once.
+- Results are joined in page order. Only a neighbor page that repeats the same label and full transcription (an overlapping photo) is merged, and the coverage line says so.
 - The coverage line counts pages, items and NEEDS REVIEW flags. With no items at all, combine fails.
 
 ### Provider transport
@@ -191,7 +198,7 @@ flowchart LR
 | Claude | `POST https://api.anthropic.com/v1/messages`, `stream: true`, `x-api-key`, `anthropic-version: 2023-06-01`. `output_config: {format: json_schema, effort: "medium"}` (effort is sent only to `claude-*-5*` models). Thinking is adaptive by default. `max_tokens` 32000, repair 48000. |
 | OpenAI | `POST https://api.openai.com/v1/responses`, `stream: true`, `stream_options.include_obfuscation: false`, `store: false`. `reasoning.effort: "medium"` for gpt-5/6/o3/o4. `text.format` is a strict json_schema. `max_output_tokens` 32000, repair 48000. Image detail high. |
 | SSE parsing | `StreamParser`. Claude: text deltas of text blocks, `message_delta.stop_reason`, `message_stop`. OpenAI: `response.output_text.delta` plus the final `response.completed/incomplete/failed` object. Both rebuild the non-stream envelope for `SolverClient.payload`. |
-| Timeouts | URLSession idle 240 s, resource 900 s |
+| Timeouts | URLSession idle 600 s (OpenAI sends nothing while it reasons), resource 1800 s |
 | Upload copies | ≤2200 px long edge, ≤1.5 MB JPEG, cached per file URL in `PageSolver` |
 | Defaults | `gpt-6.1-sol` (GPT-6.1 Sol) and `claude-opus-5-5`. Editable model IDs. Account access is not guaranteed. |
 
@@ -226,10 +233,10 @@ New app Swift files must be added to the Sources phase. The test folder is synch
 
 | Data | Location / behavior |
 | --- | --- |
-| Draft | `Documents/ScanDraft/pages.json` plus `<UUID>.jpg`. Atomic writes; a replacement is written before the old photo is deleted. Cleared after a successful PDF. |
+| Draft | `Documents/ScanDraft/pages.json` plus `<UUID>.jpg`, and a `solved` marker after a PDF. Atomic writes with until-first-unlock protection; a replacement is written before the old photo is deleted. Kept after a PDF until the next Start, a new photo, or New packet. |
 | Finished packet | `Documents/Solutions/<UUID>/Solution.pdf`, `Solution.json`, `Paper.jpg`, `Paper-2.jpg`, … (originals copied) |
 | Keys | Keychain service `GlassesSolver`, accounts `OpenAI` and `Anthropic`, `WhenUnlockedThisDeviceOnly` |
-| Preferences | `solverMode`, `solverModel`, `claudeModel`, `settingsVersion` (2 = migrated), `solveWhileScanning`, `handGestures`, `glassesButtons`, `voiceCommands` (default off), `voiceGuidance`, `privateAudio`, `cueVolume` |
+| Preferences | `solverMode`, `solverModel`, `claudeModel`, `settingsVersion` (2 = migrated; the migration also sets `voiceCommands` off and `solverModeNotice` when cross-check was replaced), `solveWhileScanning`, `handGestures`, `glassesButtons`, `voiceCommands` (default off), `voiceGuidance`, `privateAudio`, `cueVolume` |
 
 - Each key goes only to its own provider.
 - When solving while scanning is on, pages are uploaded during the scan; with it off, nothing is uploaded until Finish.
@@ -270,7 +277,10 @@ xcodebuild test -project samples/CameraAccess/CameraAccess.xcodeproj -scheme Sol
 | "Glasses buttons are unavailable" | Inputs is experimental and may be gated. Check Meta AI and firmware versions and Developer Center; gestures and the screen still work. |
 | Capture button also takes a native photo | The unrequested photo is ignored by `photoRequested`. Whether a subscribed button suppresses the system photo needs a device check. |
 | Scanning paused | The wearer single-tapped (the glasses' pause). Tap again to continue; waits are pause-aware up to 2 minutes. |
-| Same page captured twice | Page-turn heuristics. The AI also skips repeated questions via the previous-page context, and combine dedupes the same label and problem. |
+| Same page captured twice | Page-turn heuristics. The AI also skips repeated questions via the previous-page context, and combine merges a neighbor's identical label and transcription. |
+| "Scanning was stopped from the glasses" | The wearer touched and held the touchpad, the glasses' stop gesture. Tap Continue scanning. |
+| Look-alike pages never turn | The page-turn threshold is a content-fingerprint difference of 0.065. The app hints after 6 s; press the capture button or Next page now. |
+| PDF failed after locking the phone | Draft files should now be until-first-unlock. Check a draft from 1.x was migrated (`ScanDraftStore.load`). |
 | Partial or empty answer | Check the page checklist, skipped reasons, and the repair attempt. An unreadable page names its page. |
 
 Next priorities, **not completed claims**:
