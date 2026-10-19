@@ -33,7 +33,8 @@ struct SavedSolution: Identifiable {
 @MainActor
 protocol SolutionSaving {
   /// `sources` holds each packet page's photos in order; a page may have several close-up photos.
-  func save(page: SolvedPage, sources: [[URL]]) async throws -> SavedSolution
+  /// `names` are the pages' names as the wearer heard them ("Question 3"), used to title the source photos.
+  func save(page: SolvedPage, sources: [[URL]], names: [String]) async throws -> SavedSolution
 }
 
 @MainActor
@@ -41,7 +42,7 @@ struct SolutionStore: SolutionSaving {
   static var directory: URL {
     FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Solutions", isDirectory: true)
   }
-  func save(page: SolvedPage, sources pages: [[URL]]) async throws -> SavedSolution {
+  func save(page: SolvedPage, sources pages: [[URL]], names pageNames: [String]) async throws -> SavedSolution {
     let id = UUID(), date = Date()
     let folder = Self.directory.appendingPathComponent(id.uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -49,7 +50,8 @@ struct SolutionStore: SolutionSaving {
     // Flattened in page order; each photo is titled with its packet page so "source page N" can be found in the PDF.
     let sources = pages.flatMap { $0 }
     let titles = pages.enumerated().flatMap { page, frames in
-      frames.indices.map { frames.count == 1 ? "page \(page + 1)" : "page \(page + 1), part \($0 + 1) of \(frames.count)" }
+      let name = pageNames.indices.contains(page) && pageNames[page] != "Page \(page + 1)" ? " (\(pageNames[page]))" : ""
+      return frames.indices.map { "page \(page + 1)\(name)" + (frames.count == 1 ? "" : ", part \($0 + 1) of \(frames.count)") }
     }
     let names = pages.enumerated().flatMap { page, frames in
       frames.indices.map { frame in
@@ -113,18 +115,27 @@ enum SolutionPDF {
   }
   /// Thread-safe UIKit/CoreText drawing; run off the main actor so the UI stays responsive.
   /// `titles` names each source photo, e.g. "page 2, part 1 of 3"; the PDF prints "Source photograph N · <title>".
+  /// Problem text, steps, answers, checks and review notes may hold LaTeX (`$...$`, `$$...$$`), which is typeset; titles,
+  /// labels and the coverage list stay plain text.
   nonisolated static func render(page: SolvedPage, sources: [UIImage], titles: [String] = []) throws -> Data {
     let body = NSMutableAttributedString(string: "")
     var keepWithNext: [NSRange] = []
-    func append(_ text: String, size: CGFloat = 12, bold: Bool = false, color: UIColor = .black, keep: Bool = false) {
+    let textWidth: CGFloat = 524, textHeight: CGFloat = 670
+    func append(_ text: String, size: CGFloat = 12, bold: Bool = false, color: UIColor = .black, keep: Bool = false, math: Bool = false) {
       let start = body.length
       let style = NSMutableParagraphStyle(); style.lineSpacing = 4; style.paragraphSpacing = 6
-      body.append(NSAttributedString(string: text + "\n", attributes: [
+      let attributes: [NSAttributedString.Key: Any] = [
         .font: bold ? UIFont.boldSystemFont(ofSize: size) : UIFont.systemFont(ofSize: size),
-        .foregroundColor: color, .paragraphStyle: style]))
+        .foregroundColor: color, .paragraphStyle: style]
+      if math {
+        // A formula never exceeds the text column, so a page always fits at least one line (see the overflow guard below).
+        body.append(MathTypesetter.paragraphs(text, attributes: attributes, fontSize: size, maxWidth: textWidth - 4, maxHeight: textHeight - 110))
+      } else {
+        body.append(NSAttributedString(string: text + "\n", attributes: attributes))
+      }
       if bold || keep { keepWithNext.append(NSRange(location: start, length: body.length - start)) }
     }
-    append(page.title, size: 23, bold: true)
+    append(MathText.readable(page.title), size: 23, bold: true)
     append("Worked solution • \(Date().formatted(date: .abbreviated, time: .shortened))", size: 10, color: .darkGray)
     if let providers = page.providers { append(providers, size: 10, color: .darkGray) }
     if let coverage = page.coverage {
@@ -133,28 +144,28 @@ enum SolutionPDF {
       for (index, item) in page.problems.enumerated() {
         let pages = (item.sourcePages ?? []).map(String.init).joined(separator: ", ")
         let flag = item.reviewNote?.hasPrefix("NEEDS REVIEW:") == true ? " — NEEDS REVIEW" : ""
-        append("\(index + 1). \(item.label ?? "Problem") · source page(s) \(pages)\(flag)", size: 10)
+        append("\(index + 1). \(MathText.readable(item.label ?? "Problem")) · source page(s) \(pages)\(flag)", size: 10)
       }
     }
     for (index, problem) in page.problems.enumerated() {
-      append(problem.label ?? "Problem \(index + 1)", size: 16, bold: true)
+      append(MathText.readable(problem.label ?? "Problem \(index + 1)"), size: 16, bold: true)
       if let pages = problem.sourcePages {
         append("Source page(s): " + pages.map(String.init).joined(separator: ", "), size: 10, color: .darkGray, keep: true)
       }
       if let note = problem.reviewNote, !note.trimmed.isEmpty {
-        append(note, bold: note.hasPrefix("NEEDS REVIEW:"), color: .darkGray)
+        append(note, bold: note.hasPrefix("NEEDS REVIEW:"), color: .darkGray, math: true)
       }
-      append(problem.problem)
-      for (step, text) in problem.steps.enumerated() { append("\(step + 1). \(text)") }
-      append("Answer", bold: true); append(problem.answer)
-      append("Verification", bold: true); append(problem.check)
+      append(problem.problem, math: true)
+      for (step, text) in problem.steps.enumerated() { append("\(step + 1). \(text)", math: true) }
+      append("Answer", bold: true); append(problem.answer, math: true)
+      append("Verification", bold: true); append(problem.check, math: true)
       append("", size: 6)
     }
     let bounds = CGRect(x: 0, y: 0, width: 612, height: 792)
     let framesetter = CTFramesetterCreateWithAttributedString(body)
     var offset = 0, pageNumber = 0, overflow = false
     let format = UIGraphicsPDFRendererFormat()
-    format.documentInfo = [kCGPDFContextTitle as String: page.title, kCGPDFContextCreator as String: "Glasses Solver"]
+    format.documentInfo = [kCGPDFContextTitle as String: MathText.readable(page.title), kCGPDFContextCreator as String: "Glasses Solver"]
     let data = UIGraphicsPDFRenderer(bounds: bounds, format: format).pdfData { renderer in
       func chrome() {
         pageNumber += 1
@@ -167,7 +178,7 @@ enum SolutionPDF {
         let context = renderer.cgContext
         context.saveGState(); context.textMatrix = .identity
         context.translateBy(x: 0, y: bounds.height); context.scaleBy(x: 1, y: -1)
-        let path = CGPath(rect: CGRect(x: 44, y: 64, width: 524, height: 670), transform: nil)
+        let path = CGPath(rect: CGRect(x: 44, y: 64, width: textWidth, height: textHeight), transform: nil)
         var frame = CTFramesetterCreateFrame(framesetter, CFRange(location: offset, length: 0), path, nil)
         var count = CTFrameGetVisibleStringRange(frame).length
         let lines = CTFrameGetLines(frame) as! [CTLine]
@@ -184,6 +195,7 @@ enum SolutionPDF {
           }
         }
         CTFrameDraw(frame, context)
+        MathTypesetter.drawFormulas(in: frame, context: context)
         context.restoreGState()
         if count == 0 { overflow = true; break }
         offset += count

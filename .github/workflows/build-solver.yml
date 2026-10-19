@@ -28,6 +28,7 @@ jobs:
             -only-testing:CameraAccessTests/HandGestureTests \
             -only-testing:CameraAccessTests/GlassesInputTests \
             -only-testing:CameraAccessTests/FrameCaptureTests \
+            -only-testing:CameraAccessTests/MathTextTests \
             -parallel-testing-enabled NO -resultBundlePath TestResults.xcresult \
             -test-timeouts-enabled YES -default-test-execution-time-allowance 90 \
             CODE_SIGN_IDENTITY="-" CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES \

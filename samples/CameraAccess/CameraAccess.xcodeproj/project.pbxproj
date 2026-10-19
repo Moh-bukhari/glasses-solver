@@ -12,7 +12,9 @@
 		BA7C00000000000000000052 /* PageSolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C00000000000000000051; };
 		BA7C00000000000000000072 /* StartScanIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C00000000000000000071; };
 		BA7C00000000000000000082 /* FrameCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C00000000000000000081; };
+		BA7C00000000000000000092 /* MathText.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C00000000000000000091; };
 		BA7C00000000000000000062 /* MWDATInputs in Frameworks */ = {isa = PBXBuildFile; productRef = BA7C00000000000000000061 /* MWDATInputs */; };
+		BA7C000000000000000000A3 /* SwiftMath in Frameworks */ = {isa = PBXBuildFile; productRef = BA7C000000000000000000A2 /* SwiftMath */; };
 		BA7C00000000000000000022 /* ScanDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C00000000000000000021; };
 		BA7C00000000000000000012 /* BatchSolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C00000000000000000011; };
 		2982D882FF0CB083E037654E /* SolverService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C81611D51712FF60636F7C38; };
@@ -90,6 +92,7 @@
 		BA7C00000000000000000051 /* PageSolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/PageSolver.swift; sourceTree = "<group>"; };
 		BA7C00000000000000000071 /* StartScanIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/StartScanIntent.swift; sourceTree = "<group>"; };
 		BA7C00000000000000000081 /* FrameCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/FrameCapture.swift; sourceTree = "<group>"; };
+		BA7C00000000000000000091 /* MathText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/MathText.swift; sourceTree = "<group>"; };
 		BA7C00000000000000000021 /* ScanDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/ScanDraft.swift; sourceTree = "<group>"; };
 		BA7C00000000000000000011 /* BatchSolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/BatchSolver.swift; sourceTree = "<group>"; };
 		C81611D51712FF60636F7C38 /* SolverService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/SolverService.swift; sourceTree = "<group>"; };
@@ -146,6 +149,7 @@
 				8FD96B952E6F0F7D00F56AB2 /* MWDATCamera in Frameworks */,
 				8FD96B952E6F0F7D00F56AB3 /* MWDATMockDevice in Frameworks */,
 				BA7C00000000000000000062 /* MWDATInputs in Frameworks */,
+				BA7C000000000000000000A3 /* SwiftMath in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -243,6 +247,7 @@
 				BA7C00000000000000000051 /* PageSolver.swift */,
 				BA7C00000000000000000071 /* StartScanIntent.swift */,
 				BA7C00000000000000000081 /* FrameCapture.swift */,
+				BA7C00000000000000000091 /* MathText.swift */,
 				505C167EBC5FA348132A8B77 /* AutoScanModel.swift */,
 				F3C17C4B548B6BF3A1D3025D /* AutoScanView.swift */,
 				99627FE9E0D573A0526D4893 /* ScanQuality.swift */,
@@ -310,6 +315,9 @@
 			dependencies = (
 			);
 			name = CameraAccess;
+			packageProductDependencies = (
+				BA7C000000000000000000A2 /* SwiftMath */,
+			);
 			productName = CameraAccess;
 			productReference = 3A3A3A3A3A3A3A3A3A3A3A3A /* CameraAccess.app */;
 			productType = "com.apple.product-type.application";
@@ -393,6 +401,7 @@
 			mainGroup = 5A5A5A5A5A5A5A5A5A5A5A5A;
 			packageReferences = (
 				95F7F3332DEF0D91006D1C1A /* XCRemoteSwiftPackageReference "meta-wearables-dat-ios" */,
+				BA7C000000000000000000A1 /* XCRemoteSwiftPackageReference "SwiftMath" */,
 			);
 			productRefGroup = 7A7A7A7A7A7A7A7A7A7A7A7A /* Products */;
 			projectDirPath = "";
@@ -445,6 +454,7 @@
 				BA7C00000000000000000052 /* PageSolver.swift in Sources */,
 				BA7C00000000000000000072 /* StartScanIntent.swift in Sources */,
 				BA7C00000000000000000082 /* FrameCapture.swift in Sources */,
+				BA7C00000000000000000092 /* MathText.swift in Sources */,
 				7A8F8F8849FAFF6694802945 /* AutoScanModel.swift in Sources */,
 				69C00752900F44FD71C9AFD5 /* AutoScanView.swift in Sources */,
 				A0EADB51FEB0A4BBC4CBC386 /* ScanQuality.swift in Sources */,
@@ -515,7 +525,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = CameraAccess/CameraAccess.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 9;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
@@ -526,7 +536,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.2;
+				MARKETING_VERSION = 2.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolver;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;
@@ -542,7 +552,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = CameraAccess/CameraAccess.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 9;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
@@ -552,7 +562,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.2;
+				MARKETING_VERSION = 2.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolver;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;
@@ -566,13 +576,13 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 9;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 2.2;
+				MARKETING_VERSION = 2.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolverUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -592,13 +602,13 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 9;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 2.2;
+				MARKETING_VERSION = 2.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolverUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -618,13 +628,13 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 9;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 2.2;
+				MARKETING_VERSION = 2.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolverTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -647,13 +657,13 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 9;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 2.2;
+				MARKETING_VERSION = 2.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolverTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -834,6 +844,14 @@
 				version = 1.0.1;
 			};
 		};
+		BA7C000000000000000000A1 /* XCRemoteSwiftPackageReference "SwiftMath" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/mgriebling/SwiftMath";
+			requirement = {
+				kind = exactVersion;
+				version = 1.7.3;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -856,6 +874,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 95F7F3332DEF0D91006D1C1A /* XCRemoteSwiftPackageReference "meta-wearables-dat-ios" */;
 			productName = MWDATInputs;
+		};
+		BA7C000000000000000000A2 /* SwiftMath */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BA7C000000000000000000A1 /* XCRemoteSwiftPackageReference "SwiftMath" */;
+			productName = SwiftMath;
 		};
 		E66CC01E2F3E1A9300B07380 /* MWDATMockDeviceTestClient */ = {
 			isa = XCSwiftPackageProductDependency;

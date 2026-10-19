@@ -992,14 +992,14 @@ final class AutoScanModel {
   }
 
   private func save(_ entries: [(number: Int, result: PageResult)], providers: String) {
-    let id = runID, sources = pages.map(\.frames)
+    let id = runID, sources = pages.map(\.frames), names = pages.indices.map(pageName)
     let missing = pages.indices.filter { leftOut.contains(pages[$0].id) }.map(pageName)
     phase = .saving; progress = 1; guide = "Making your PDF…"
     worker = Task { [weak self] in
       guard let self else { return }
       do {
         let solution = try PagePlan.combine(entries, providers: providers)
-        let saved = try await saver.save(page: solution, sources: sources)
+        let saved = try await saver.save(page: solution, sources: sources, names: names)
         try Task.checkCancellation(); guard runID == id else { return }
         result = saved; phase = .finished
         let review = solution.problems.contains { $0.reviewNote?.hasPrefix("NEEDS REVIEW") == true }

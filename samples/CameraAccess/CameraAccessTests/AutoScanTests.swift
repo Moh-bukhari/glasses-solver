@@ -786,7 +786,7 @@ final class AutoScanTests: XCTestCase {
     XCTAssertEqual(model.pages.indices.map { model.pages[$0].name(at: $0) }, ["Question 1", "Question 2"])
     XCTAssertTrue(model.guide.hasPrefix("Question 1 updated: 2 photos."), model.guide)
     model.handle(.finish); await waitUntil { model.phase == .finished }
-    XCTAssertEqual(saver.frameCounts, [2, 1])
+    XCTAssertEqual(saver.frameCounts, [2, 1]); XCTAssertEqual(saver.names, ["Question 1", "Question 2"])
     let names = await solver.jobs.map(\.title)
     XCTAssertTrue(names.contains("Question 1") && names.contains("Question 2"), "The AI names pages by question: \(names)")
     model.stop()
@@ -1173,8 +1173,9 @@ private final class FakeSolutionSaver: SolutionSaving {
   var sourceCount = 0
   var lastPage: SolvedPage?
   var frameCounts: [Int] = []
-  func save(page: SolvedPage, sources: [[URL]]) async throws -> SavedSolution {
-    saves += 1; sourceCount = sources.count; frameCounts = sources.map(\.count); lastPage = page
+  var names: [String] = []
+  func save(page: SolvedPage, sources: [[URL]], names: [String]) async throws -> SavedSolution {
+    saves += 1; sourceCount = sources.count; frameCounts = sources.map(\.count); lastPage = page; self.names = names
     return SavedSolution(id: UUID(), title: page.title, date: Date(), pdf: URL(fileURLWithPath: "/tmp/test.pdf"), source: URL(fileURLWithPath: "/tmp/test.jpg"))
   }
 }
