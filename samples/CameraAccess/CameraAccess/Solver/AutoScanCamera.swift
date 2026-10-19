@@ -32,7 +32,7 @@ extension ScanCommand {
       switch press {
       case .shortPress: return .next
       case .doublePress: return .finish
-      case .hold: return .retakeLast
+      case .hold: return .previous
       }
     case .button: return .finish
     default: return nil

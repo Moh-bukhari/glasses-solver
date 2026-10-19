@@ -47,15 +47,20 @@ enum SolverKeychain {
   /// Custom model IDs are kept; cross-check mode can be chosen again in Settings.
   static func migrateDefaults() {
     let defaults = UserDefaults.standard
-    guard defaults.integer(forKey: "settingsVersion") < 2 else { return }
-    if defaults.string(forKey: "solverModel") == "gpt-5.4" { defaults.set(SolverConfiguration.openAIDefault, forKey: "solverModel") }
-    if defaults.string(forKey: "claudeModel") == "claude-sonnet-5-5" { defaults.set(SolverConfiguration.claudeDefault, forKey: "claudeModel") }
-    if defaults.string(forKey: "solverMode") == SolverMode.both.rawValue {
-      defaults.set(defaultMode().rawValue, forKey: "solverMode"); defaults.set(true, forKey: "solverModeNotice")
+    let version = defaults.integer(forKey: "settingsVersion")
+    guard version < 3 else { return }
+    if version < 2 {
+      if defaults.string(forKey: "solverModel") == "gpt-5.4" { defaults.set(SolverConfiguration.openAIDefault, forKey: "solverModel") }
+      if defaults.string(forKey: "claudeModel") == "claude-sonnet-5-5" { defaults.set(SolverConfiguration.claudeDefault, forKey: "claudeModel") }
+      if defaults.string(forKey: "solverMode") == SolverMode.both.rawValue {
+        defaults.set(defaultMode().rawValue, forKey: "solverMode"); defaults.set(true, forKey: "solverModeNotice")
+      }
+      // 2.0 is controlled by gestures; an old "on" choice must not keep the microphone open.
+      defaults.set(false, forKey: "voiceCommands")
     }
-    // 2.0 is controlled by gestures and glasses buttons; an old "on" choice must not keep the microphone open.
-    defaults.set(false, forKey: "voiceCommands")
-    defaults.set(2, forKey: "settingsVersion")
+    // 2.1 is controlled by hand gestures only. Glasses buttons (Meta's experimental Inputs) stay an opt-in in Settings.
+    defaults.set(false, forKey: "glassesButtons")
+    defaults.set(3, forKey: "settingsVersion")
   }
 }
 
@@ -76,7 +81,7 @@ struct SolverSettingsView: View {
   @AppStorage("privateAudio") private var privateAudio = true
   @AppStorage("voiceCommands") private var commands = false
   @AppStorage("handGestures") private var gestures = true
-  @AppStorage("glassesButtons") private var glassesButtons = true
+  @AppStorage("glassesButtons") private var glassesButtons = false
   @AppStorage("solveWhileScanning") private var solveWhileScanning = true
   @State private var error: String?
   var body: some View {
@@ -111,9 +116,9 @@ struct SolverSettingsView: View {
         }
         Section("Silent controls") {
           Toggle("Hand gestures", isOn: $gestures)
-          Text("Thumbs-up held about one second in front of the glasses finishes and solves; thumbs-down retakes the last page. Detection runs on the iPhone.").font(.footnote)
-          Toggle("Glasses buttons (beta)", isOn: $glassesButtons)
-          Text("Double-tap the touchpad or double-press the capture button to finish. Press the capture button for the next page now; hold it to retake. Uses Meta's experimental Inputs; if your glasses or Meta AI version don't allow it, the app says so and gestures still work.").font(.footnote)
+          Text("Fist with the thumb out, held about one second in front of the glasses: 👍 up solves, 👉 to your right is next page, 👈 to your left (or 👎) is previous page. Detection runs on the iPhone.").font(.footnote)
+          Toggle("Glasses buttons (experimental)", isOn: $glassesButtons)
+          Text("Off by default. Uses Meta's experimental Inputs, which may not reach the app on your glasses or Meta AI version. Gestures always work.").font(.footnote)
           Toggle("Voice commands", isOn: $commands)
           Text("Off by default. Turning this on uses the microphone and on-device speech recognition.").font(.footnote)
         }

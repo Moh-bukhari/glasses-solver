@@ -42,7 +42,7 @@ struct PageSample: Sendable {
   var issue: String? = nil
   /// Median detected text-line height in pixels of the full-resolution image; 0 when no text was located.
   var linePixels: Double = 0
-  /// A deliberate command hand (thumbs up/down) in this preview frame. Stills are never classified.
+  /// A deliberate command hand (fist with the thumb up, down, right or left) in this preview frame. Stills are never classified.
   var gesture: HandGesture? = nil
   var acceptable: Bool { issue == nil && !fingerprint.isEmpty }
   var corners: [PagePoint] {
@@ -336,6 +336,7 @@ struct PageTurnGate {
   private var changedSince = 0.0
   mutating func saved(_ sample: PageSample, at time: Double) { saved = sample; savedAt = time; changedFrames = 0 }
   mutating func reset() { self = Self() }
+  var hasReference: Bool { saved != nil }
   /// Requires three consecutive changed views spanning at least 0.4 s, so per-frame analysis cannot rush it.
   mutating func observe(_ sample: PageSample, at time: Double) -> Bool {
     guard let saved, time - savedAt >= 2, sample.acceptable, sample.closeEnough, sample.gesture == nil else {

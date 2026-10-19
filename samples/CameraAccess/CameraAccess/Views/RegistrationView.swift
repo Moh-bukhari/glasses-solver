@@ -25,6 +25,11 @@ struct RegistrationView: View {
       // Handle callback URLs from the Meta mobile app
       // This is essential for completing DAT SDK registration and permission flows
       .onOpenURL { url in
+        // glassessolver://scan starts scanning, e.g. from a Shortcuts "Open URL" action.
+        if url.host == "scan" {
+          AutoScanModel.shared.requestShortcutStart()
+          return
+        }
         guard
           let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
           // Check if this URL is related to DAT SDK workflows (contains metaWearablesAction query param)

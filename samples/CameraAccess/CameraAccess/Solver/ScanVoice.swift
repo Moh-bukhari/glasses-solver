@@ -3,12 +3,13 @@ import AVFoundation
 import Speech
 
 enum ScanCommand: Equatable {
-  case finish, next, retakeLast, cancel
+  /// `previous` retakes the page just saved; repeating it steps one more page back.
+  case finish, next, previous, cancel
   static func parse(_ text: String) -> Self? {
     let words = text.lowercased().split { !$0.isLetter }.joined(separator: " ")
     if words.hasSuffix("finish scanning") || words.hasSuffix("done scanning") { return .finish }
     if words.hasSuffix("next page") { return .next }
-    if words.hasSuffix("retake last page") { return .retakeLast }
+    if words.hasSuffix("previous page") || words.hasSuffix("retake last page") { return .previous }
     if words.hasSuffix("cancel scanning") { return .cancel }
     return nil
   }

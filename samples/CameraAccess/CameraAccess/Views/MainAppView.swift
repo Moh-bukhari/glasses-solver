@@ -20,18 +20,21 @@ import SwiftUI
 struct MainAppView: View {
   let wearables: WearablesInterface
   var viewModel: WearablesViewModel
+  @State private var tab = 0
 
   var body: some View {
-    TabView {
-      AutoScanView(wearablesVM: viewModel).tabItem { Label("Auto Scan", systemImage: "viewfinder") }
+    TabView(selection: $tab) {
+      AutoScanView(wearablesVM: viewModel).tabItem { Label("Auto Scan", systemImage: "viewfinder") }.tag(0)
       Group {
         if viewModel.registrationState == .registered {
           CameraView(wearables: wearables, wearablesVM: viewModel)
         } else {
           HomeScreenView(viewModel: viewModel)
         }
-      }.tabItem { Label("Glasses", systemImage: "eyeglasses") }
-      SolutionHistoryView().tabItem { Label("PDFs", systemImage: "doc.richtext") }
+      }.tabItem { Label("Glasses", systemImage: "eyeglasses") }.tag(1)
+      SolutionHistoryView().tabItem { Label("PDFs", systemImage: "doc.richtext") }.tag(2)
     }
+    // The Start Glasses Scan shortcut always lands on Auto Scan, which starts the camera once the app is active.
+    .onChange(of: AutoScanModel.shared.shortcutRequests) { _, _ in tab = 0 }
   }
 }

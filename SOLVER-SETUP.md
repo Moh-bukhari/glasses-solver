@@ -1,65 +1,81 @@
-# Glasses Solver 2.0: one button, silent controls, fast PDF
+# Glasses Solver 2.1: start from a shortcut, control everything with your thumb
 
-Version 2.0 replaces the slow solving pipeline. Before, a packet ran through 4–18 back-to-back AI requests, each waiting silently for the full answer, which could take 10–45 minutes or time out. Now each page is solved in its own streaming request while you keep scanning. When you finish, only the last page is left, so the PDF arrives about one page-solve later.
+You don't need to take out your phone during a scan. Start it with a shortcut (Action button, Back Tap, Control Center or Siri), scan by looking at each page, and use three thumb gestures. If the AI can't read a page, the glasses ask for that page again and then finish the PDF; you never have to tap Retake on the phone.
 
-You control everything with a thumbs-up or clicks on the glasses. Voice commands are off by default, and directions play quietly through the glasses only.
+Each page is solved in its own streaming request while you keep scanning. When you finish, only the last page is left, so the PDF arrives about one page-solve later. Directions play quietly through the glasses only. Voice commands and glasses buttons are off by default.
 
 ## Install from Windows
 
-1. Open [Build Glasses Solver IPA](https://github.com/Moh-bukhari/glasses-solver/actions/workflows/build-solver.yml). Pick the latest run of the 2.0 branch where **both** the verify and build jobs passed.
+1. Open [Build Glasses Solver IPA](https://github.com/Moh-bukhari/glasses-solver/actions/workflows/build-solver.yml). Pick the latest run of the `claude/pensive-allen-ggkllj` branch where **both** the verify and build jobs passed.
 2. Download **GlassesSolver-IPA** under Artifacts and extract the ZIP.
 3. Use iloader to install `GlassesSolver-unsigned.ipa` over the existing app, with the same Apple account. Don't delete the old app first: saved pages, PDFs and API keys stay.
 4. Open **Auto Scan → Settings (gear)**.
-   - Choose **OpenAI** or **Claude** and check the API key.
-   - 2.0 switches the old defaults to **GPT-6.1 Sol** (`gpt-6.1-sol`) and **Claude Opus 5.5** (`claude-opus-5-5`).
-   - If you used the old "OpenAI + Claude" default, it becomes a single provider, because that is fastest: OpenAI if its key is saved, otherwise Claude. **Both · cross-check (slower)** is still available.
+   - Choose **OpenAI** or **Claude** and check the API key. Defaults: **GPT-6.1 Sol** (`gpt-6.1-sol`) and **Claude Opus 5.5** (`claude-opus-5-5`).
    - Save.
-5. Make sure the glasses are connected in Meta AI and Developer Mode is on. Allow camera access when asked.
+5. Make sure the glasses are connected in Meta AI and Developer Mode is on. Run one scan from the app first, so you can allow camera access on the phone.
+
+## Set up the start shortcut (once)
+
+The app installs a shortcut called **Start Glasses Scan**. It opens the app on Auto Scan and starts the glasses camera; if a packet is already solved, it starts a new one.
+
+1. **Check it:** open the Shortcuts app → App Shortcuts → Glasses Solver → **Start Glasses Scan**, and run it once.
+2. **Action button** (iPhone 15 Pro and later): Settings → Action Button → swipe to **Shortcut** → Choose a Shortcut → **Start Glasses Scan**. Press and hold the button to start.
+3. **Back Tap** (any recent iPhone): first add it to your shortcuts (Shortcuts → + → search "Start Glasses Scan" → add → name it "Glasses Scan"). Then Settings → Accessibility → Touch → Back Tap → Double Tap → **Glasses Scan**. Double-tap the back of the phone to start.
+4. **Control Center or Lock Screen** (iOS 18+): + → Add a Control → **Shortcut** → choose "Glasses Scan".
+5. **Siri:** "Start a scan in Glasses Solver".
+
+If the shortcut isn't listed, make a personal shortcut with the **Open URLs** action and the address `glassessolver://scan`; it does the same thing.
+
+The phone must be unlocked, because the app has to be on screen for the glasses camera. Put the phone face up on the desk, start with the shortcut, and leave it there. The screen stays on while you scan.
 
 ## Scan a packet
 
-1. Tap **Start scanning**.
-2. Look at the first page, close enough that the small writing is readable. Quiet directions in the glasses (left / right / tilt / closer / hold still) guide you.
+1. Start with the shortcut (or tap **Start scanning**). You hear "Ready".
+2. Look at the first page, close enough that the small writing is readable. Quiet directions (left / right / tilt / closer / hold still) guide you.
 3. When the view is clear and steady, it takes the photo. You hear **"Got it"**, and you can turn the page right away while the photo transfers. Then **"Page 1 saved"**.
-4. Turn to the next page. Changed writing re-arms the camera automatically. Pages are solved in the background as you go: each page's thumbnail shows a clock, a spinner, or a green check.
-5. When you're done, **give a thumbs-up**. Make a fist about 30 cm (one foot) in front of the glasses, curled fingers toward you, thumb straight up, and hold it for about a second. You can also double-tap the glasses touchpad, double-press the capture button, or tap **Done · Solve** on the phone.
-6. You hear "Done scanning. Solving." The PDF opens on the phone as soon as the last page is solved.
+4. Turn to the next page. New writing re-arms the camera automatically. Pages are solved in the background as you go.
+5. When you're done, give a **thumbs-up**. You hear "Done scanning. Solving." The PDF opens on the phone as soon as the last page is solved.
 
-## Silent controls
+## Hand gestures
 
-| Do this | What happens |
+Make a fist with your thumb straight out. Hold it in front of you, in the middle of your view, about a forearm's length away, for about one second. Lower your hand before the next gesture; gestures are about 2 seconds apart.
+
+| Gesture | Meaning |
 | --- | --- |
-| 👍 Thumbs-up, held ~1 second | Finish scanning and solve |
-| 👎 Thumbs-down, held ~1 second | Retake the last page; the old photo stays until the new one is clear |
-| Double-tap the touchpad, or double-press the capture button | Finish scanning and solve |
-| Press the capture button once | Next page now (for look-alike pages), or take the current view as soon as the writing is clear |
-| Hold the capture button | Retake the last page |
-| Single tap on the touchpad | Reserved by the glasses: pauses or resumes. Scanning waits while paused and continues when you tap again |
-| Touch-and-hold on the touchpad | Reserved by the glasses: **stops** the glasses session. Avoid it; to retake, hold the capture button instead |
+| 👍 Thumb **up** | **Start solution.** Finish scanning and make the PDF. |
+| 👉 Thumb to **your right** | **Next page.** Take the next page now (useful for look-alike pages), or take the page in view now. |
+| 👈 Thumb to **your left** (👎 thumb down also works) | **Previous page.** Retakes the page you just scanned. Do it again to go one more page back. Turn back to that page and it's captured when steady; the old photo stays until the new one is clear. |
 
-- **Gestures** are recognized on the iPhone from the glasses camera. A hand holding or resting on the paper is ignored, and the app never photographs a raised command hand.
-- **Glasses buttons** use Meta's experimental Inputs feature. After each photo they take a moment to reconnect, so wait for "Page N saved" before pressing. If your glasses or Meta AI version doesn't allow it, the app says so once and the thumbs-up still works.
-- **Look-alike pages:** if a new page looks too much like the last one, the turn isn't detected and you'll hear "If this is a new page, press the capture button". Press it once, or tap **Next page now**.
-- **Voice commands:** if you had turned them on in 1.x, 2.0 turns them off once so the microphone isn't used.
+- Thumb right is easiest with your right hand, and thumb left with your left hand, palm turned up or toward you. Keep the thumb level for left and right, and straight up or down for the others. Diagonal thumbs are ignored on purpose.
+- Hands holding, pinching or resting on the paper are ignored, and the app never photographs a raised hand.
+- After you retake an earlier page, the camera stays on but doesn't add pages by itself, because the sheets in front of you were already scanned. Turn to the first new page and give 👉, or give 👍 to solve.
+
+## When the AI can't read a page
+
+- **During the scan** you hear, for example, "Page 3: the bottom line is cut off. I'll ask for it again when you finish." Keep scanning.
+- **After 👍** the glasses ask: "Show page 3 again, or thumbs-up to solve without it." Turn to page 3 and hold it steady. It's captured once the view changes to it (or after a few seconds if you were already showing it), and solving continues by itself.
+- **👍 instead** makes the PDF without that page. The PDF lists it as **NEEDS REVIEW** with its photo, so you can see what's missing.
+- **Network or provider failure** after retries: you hear the reason and "Give a thumbs-up to try again". The camera stays on for that thumbs-up; already solved pages aren't sent again.
 
 ## Spoken directions
 
-- Directions and progress are spoken at **5%** volume through the glasses only: **Only through glasses or headphones** is on by default, so the phone speaker stays silent. The phone's Silent switch no longer mutes them. The same text is always on screen.
+- Directions and progress are spoken at **5%** volume through the glasses only (**Only through glasses or headphones** is on by default). The same text is always on screen.
 - You can change the volume in Settings or turn speech off. The microphone isn't used unless you turn on **Voice commands** in Settings.
 
 ## Speed options (Settings)
 
-- **Solve pages while scanning** (on): each page is uploaded and solved once the next page is saved. Turn it off to upload nothing until you finish; all pages are then solved at once, in parallel.
-- **Provider:** one provider is fastest. **Both · cross-check** solves every page with both providers and then reconciles the answers, which adds one round per page and doubles the cost.
+- **Solve pages while scanning** (on): each page is uploaded and solved once the next page is saved. Turn it off to upload nothing until you finish.
+- **Provider:** one provider is fastest. **Both · cross-check** solves every page with both providers and then reconciles the answers; it's slower and costs twice as much.
 
 ## If something goes wrong
 
-- **A page can't be read:** you'll hear about it during scanning, and the message names the page. Tap **Retake** under that page (or **Replace photo**), then tap **Done**. Finishing again without a new photo just resends the same photo. Pages already solved are kept and aren't sent again.
-- **Network or a busy provider:** requests are retried automatically, at most twice. If a page still fails, finish again: only the failed pages are solved again.
-- **Key, billing, or model errors:** shown right away, with no retries. Fix them in Settings and finish again.
-- **No API key:** Start still saves pages but tells you a key is missing. Finishing opens Settings.
-- **Leaving the app:** switching tabs or tapping Pause doesn't cancel solving. Leaving the app pauses the camera, and you'll hear "Scanning paused". Solving keeps going for as long as iOS allows, and the PDF can still be made if the phone locks. Keep the app open while scanning.
-- **Fixing a page after the PDF:** the solved pages stay until you start a new packet. Tap **Retake** or **Replace photo** under a page, then **Done** to rebuild the PDF; only that page and its neighbors are solved again. **Start a new packet** clears them. Every PDF's original photos stay in **Files → On My iPhone → Glasses Solver → Solutions**.
+- **Leaving the app or locking the phone** pauses the camera ("Scanning paused"). Solving continues as long as iOS allows. Run the shortcut again (or tap Continue) to keep scanning.
+- **Forgotten scan:** after 5 minutes with no new page and no gesture, the camera stops by itself. Your pages are kept.
+- **Key, billing, or model errors:** shown right away with no retries. Fix them in Settings and finish again (this one needs the phone).
+- **No API key:** scanning still saves pages but tells you a key is missing.
+- **Gesture not recognized:** hold the hand closer and more centered, fingers curled tight, thumb straight. Check that **Hand gestures** is on in Settings.
+- **Fixing a page after the PDF:** the solved pages stay until you start a new packet. Tap **Retake** under a page; when it's saved, give 👍 to rebuild the PDF. Only that page and its neighbors are solved again. Every PDF's original photos stay in **Files → On My iPhone → Glasses Solver → Solutions**.
+- **Glasses buttons:** Meta's experimental Inputs didn't reach the app on your glasses, so 2.1 turns them off. You can turn them on again in Settings to try. A single tap on the touchpad still pauses or resumes the glasses, and touch-and-hold stops the glasses session.
 
 ## Limits and privacy
 
@@ -67,17 +83,16 @@ You control everything with a thumbs-up or clicks on the glasses. Voice commands
 - Each page request includes that page plus its previous and next pages, labeled, so questions that continue across pages are solved once.
 - Answers include worked steps, a final answer, and a check. Uncertain items are marked **NEEDS REVIEW**. Compare the transcriptions with your photos.
 - Keys stay in separate iPhone Keychain entries and go only to their own provider.
-- With solving while scanning on, pages are uploaded during the scan. Turn it off if you want nothing sent until you finish.
 - Gesture detection and speech stay on the phone.
 
 ## What was tested
 
-GitHub's macOS build compiles the iPhone app and runs these simulator tests:
+GitHub's macOS build compiles the iPhone app and runs simulator tests for:
 
-- **Capture and solving:** scanning and solving coordinator tests.
-- **Gestures:** the gesture classifier and its timing gate.
-- **Glasses buttons:** how each click maps to an action.
+- **Capture and solving:** the coordinator, including the gesture-only flows: next, previous, retaking an earlier page, asking again for an unreadable page, solving without it, retrying after a failure, and the start shortcut.
+- **Gestures:** the classifier for all four thumb directions, diagonal and paper-grip rejection, and the timing gate.
 - **AI responses:** streaming parsing for both providers, retries and repairs, request formats, and the PDF.
-- **Meta mock glasses:** full-photo capture, plus a glasses-button test.
+- **Meta mock glasses:** preview frames and full-photo capture.
+- **Shortcut:** the build checks that the Start Glasses Scan shortcut is in the app.
 
-Real glasses, real hand gestures, glasses-button availability on your account, audio routing, and paid API answers still need a test on your device.
+Still to check on your device: real glasses, real hand gestures (especially thumb left and right), the shortcut on your phone, audio routing, and paid API answers.

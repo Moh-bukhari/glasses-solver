@@ -20,7 +20,7 @@ struct AutoScanView: View {
   @AppStorage("cueVolume") private var cueVolume = Double(ScanVoice.quietVolume)
   @AppStorage("privateAudio") private var privateAudio = true
   @AppStorage("handGestures") private var handGestures = true
-  @AppStorage("glassesButtons") private var glassesButtons = true
+  @AppStorage("glassesButtons") private var glassesButtons = false
   @AppStorage("solveWhileScanning") private var solveWhileScanning = true
   @AppStorage("solverModeNotice") private var modeNotice = false
 
@@ -29,7 +29,7 @@ struct AutoScanView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 18) {
           Text("One button. Every page. One PDF.").font(.title2.bold())
-          Text("Tap Start and look at each page; it captures automatically. Give a 👍 thumbs-up (or double-tap the glasses) to solve. Pages are solved while you scan.")
+          Text("Tap Start, or run the Start Glasses Scan shortcut, and look at each page; it captures automatically. 👍 solves, 👉 next page, 👈 previous page. Pages are solved while you scan.")
             .foregroundStyle(.secondary)
           if modeNotice && !importOnly {
             HStack(alignment: .top) {
@@ -87,7 +87,7 @@ struct AutoScanView: View {
         } catch is CancellationError {} catch { importError = error.localizedDescription }
       }
       .task {
-        model.reloadDraft(); applySettings()
+        model.reloadDraft(); applySettings(); startFromShortcut()
         if !importedInitial, let initialImage, let data = initialImage.jpegData(compressionQuality: 0.95) {
           if model.isRunning {
             importError = "A packet is being scanned or solved. Add this photo when it finishes."
@@ -98,7 +98,11 @@ struct AutoScanView: View {
         }
       }
       .onChange(of: model.keyPrompts) { _, _ in settings = true }
-      .onChange(of: scenePhase) { _, value in if value == .background { model.backgrounded() } }
+      .onChange(of: model.shortcutRequests) { _, _ in startFromShortcut() }
+      .onChange(of: scenePhase) { _, value in
+        if value == .background { model.backgrounded() }
+        if value == .active { startFromShortcut() }
+      }
       // Switching tabs stops the camera only; page solving and the PDF keep going.
       .onDisappear { model.viewDisappeared() }
     }
@@ -147,14 +151,22 @@ struct AutoScanView: View {
 
   private var controlsHelp: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Text("Silent controls").font(.subheadline.bold())
-      Text("👍 Thumbs-up, held about one second in front of the glasses: finish and solve.")
-      Text("👎 Thumbs-down: retake the last page.")
-      Text("Glasses: double-tap the touchpad or double-press the capture button to finish. Press the capture button for the next page now; hold it to retake. Buttons wake up a moment after each photo. A single tap on the touchpad pauses or resumes; touch-and-hold on the touchpad stops the glasses session, so avoid it.")
-      Text("Directions are spoken quietly through the glasses only. Keep this app open and the phone unlocked while scanning; solving continues if you switch tabs. After the PDF, Retake or Replace a page to fix it and tap Done to rebuild the PDF.")
+      Text("Hand gestures").font(.subheadline.bold())
+      Text("Make a fist with the thumb out and hold it about one second in front of the glasses.")
+      Text("👍 Thumb up: start solving (finish).")
+      Text("👉 Thumb to your right: next page now, or take the page in view now.")
+      Text("👈 Thumb to your left (or 👎): previous page. Retakes the page you just scanned; again to go one more page back. Turn back to that page and it is captured when steady.")
+      Text("If the AI can't read a page, the glasses ask for it again after you finish. Show it, or give 👍 to solve without it.")
+      Text("Start without touching the app: add the Start Glasses Scan shortcut to the Action button (Settings › Action Button › Shortcut) or Back Tap (Settings › Accessibility › Touch › Back Tap), or say \u{201C}Start a scan in Glasses Solver\u{201D} to Siri. The phone must be unlocked.")
+      Text("Directions are spoken quietly through the glasses only. Keep the phone unlocked with this app open while scanning; solving continues if you switch tabs.")
     }.font(.footnote).foregroundStyle(.secondary)
   }
 
+  /// The launch shortcut starts scanning once the app is in the foreground; the import sheet never starts the camera.
+  private func startFromShortcut() {
+    guard !importOnly, scenePhase == .active, model.shortcutPending else { return }
+    applySettings(); model.startFromShortcut()
+  }
   private func applySettings() {
     model.voiceGuidance = voiceGuidance; model.voiceCommands = voiceCommands
     model.cueVolume = Float(cueVolume); model.privateAudio = privateAudio
@@ -168,6 +180,19 @@ struct AutoScanView: View {
     case .solving, .saving: return "sparkles"
     case .awaitingNext: return "doc.on.doc"
     default: return "viewfinder"
+    }
+  }
+}
+
+extension HandGesture {
+  /// Shown on the viewfinder while a command hand is held. The sideways thumbs use pointing symbols.
+  var symbol: String {
+    switch self {
+    case .thumbsUp: return "👍"
+    case .thumbsDown: return "👎"
+    case .thumbsRight: return "👉"
+    case .thumbsLeft: return "👈"
+    case .openPalm: return "✋"
     }
   }
 }
@@ -189,8 +214,8 @@ private struct ScanViewfinder: View {
           Image(decorative: preview, scale: 1).resizable().scaledToFit()
           ContentOutline(points: model.sample.corners, imageSize: CGSize(width: preview.width, height: preview.height))
             .stroke(model.sample.acceptable && model.sample.closeEnough ? Color.mint : Color.orange, lineWidth: 3)
-          if model.sample.gesture != nil {
-            Image(systemName: "hand.raised.fill").font(.system(size: 44)).foregroundStyle(.white.opacity(0.85))
+          if let gesture = model.sample.gesture {
+            Text(gesture.symbol).font(.system(size: 54)).shadow(radius: 4)
           }
         } else if let image = model.capturedPreview {
           Image(uiImage: image).resizable().scaledToFit()

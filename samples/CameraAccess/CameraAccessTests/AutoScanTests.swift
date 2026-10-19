@@ -285,7 +285,7 @@ final class AutoScanTests: XCTestCase {
       await waitUntil { commands.count == 2 }
       glasses.services.input.capture(pressType: .hold)
       await waitUntil { commands.count == 3 }
-      XCTAssertEqual(commands, [.finish, .next, .retakeLast])
+      XCTAssertEqual(commands, [.finish, .next, .previous])
       // A single touchpad tap pauses; the scan reports it and resumes on the next tap instead of failing.
       glasses.services.captouch.tap()
       await waitUntil { notices.contains { $0.hasPrefix("Paused from the glasses") } }
@@ -348,7 +348,7 @@ final class AutoScanTests: XCTestCase {
   func testVoiceCommandsAndQuietDefault() {
     XCTAssertEqual(ScanCommand.parse("please finish scanning"), .finish)
     XCTAssertEqual(ScanCommand.parse("Next page."), .next)
-    XCTAssertEqual(ScanCommand.parse("retake last page"), .retakeLast)
+    XCTAssertEqual(ScanCommand.parse("retake last page"), .previous)
     XCTAssertEqual(ScanCommand.parse("cancel scanning"), .cancel)
     XCTAssertNil(ScanCommand.parse("I am scanning a page"))
     XCTAssertEqual(ScanVoice.quietVolume, 0.05, accuracy: 0.0001)
@@ -532,20 +532,140 @@ final class AutoScanTests: XCTestCase {
     XCTAssertEqual(model.phase, .seeking, "A new page in view re-arms capture without any command.")
     model.stop()
   }
-  func testUnreadablePageIsAnnouncedWhileScanning() async throws {
-    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
-    let solver = FakePageSolver(failure: AIResultError.unreadable("Page 1: the bottom line is cut off.")), saver = FakeSolutionSaver()
-    let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), solver, saver)
+  /// Scans two pages hands-free; the AI cannot read page 1 while page 2 is being scanned.
+  private func scanTwoPagesWithUnclearFirstPage(_ camera: FakeScanCamera, _ model: AutoScanModel) async throws {
     model.start(); await waitUntil { model.phase == .seeking }
     try await sendStableFrames(camera, model: model)
     await waitUntil { model.phase == .awaitingNext }
     model.handle(.next)
     try await sendStableFrames(camera, model: model)
-    await waitUntil { model.solveStatus.contains("bottom line") }
-    XCTAssertTrue(model.solveStatus.contains("Retake it from the phone"), model.solveStatus)
-    model.finishScanning(); await waitUntil { model.phase == .failed }
-    XCTAssertTrue(model.guide.contains("Retake button"), "Finishing again cannot fix an unreadable photo. \(model.guide)")
+    await waitUntil { model.pages.count == 2 && model.solveStatus.contains("bottom line") }
+    XCTAssertTrue(model.solveStatus.contains("ask for it again when you finish"), model.solveStatus)
+  }
+  func testUnclearPageIsAskedForAgainAfterFinishWithoutThePhone() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: goodSample())
+    let solver = FakePageSolver(unreadableOnceOnPage: 1), saver = FakeSolutionSaver()
+    let model = makeModel(camera, analyzer, solver, saver)
+    try await scanTwoPagesWithUnclearFirstPage(camera, model)
+    let original = model.pages.map(\.id)
+    model.handle(.finish)
+    await waitUntil { model.phase == .seeking && camera.starts == 2 }
+    XCTAssertTrue(model.guide.contains("Show page 1 again"), model.guide)
+    // The sheet still in view (page 2) is never saved as page 1; the view must change first.
+    try await sendStableFrames(camera, model: model, count: 7)
+    XCTAssertEqual(camera.captures, 2); XCTAssertEqual(model.phase, .seeking, model.guide)
+    XCTAssertTrue(model.guide.contains("Turn to page 1"), model.guide)
+    await analyzer.setContent(0.3) // the wearer turns back to page 1
+    try await sendStableFrames(camera, model: model, count: 20)
+    await waitUntil { model.phase == .finished }
+    XCTAssertEqual(model.phase, .finished, model.guide)
+    XCTAssertEqual(camera.captures, 3); XCTAssertEqual(model.pages.count, 2)
+    XCTAssertNotEqual(model.pages[0].id, original[0]); XCTAssertEqual(saver.saves, 1)
+    XCTAssertEqual(saver.lastPage?.problems.map(\.label), ["1(a) p1", "1(a) p2"])
     model.stop()
+  }
+  func testThumbsUpWhileAskedForAnUnclearPageSolvesWithoutIt() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let solver = FakePageSolver(unreadableOnceOnPage: 1), saver = FakeSolutionSaver()
+    let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), solver, saver)
+    try await scanTwoPagesWithUnclearFirstPage(camera, model)
+    model.handle(.finish)
+    await waitUntil { model.phase == .seeking && camera.starts == 2 }
+    model.handle(.finish)
+    await waitUntil { model.phase == .finished }
+    XCTAssertEqual(model.phase, .finished, model.guide)
+    XCTAssertEqual(camera.captures, 2); XCTAssertEqual(saver.saves, 1)
+    let note = saver.lastPage?.problems.first
+    XCTAssertEqual(note?.label, "Page 1"); XCTAssertEqual(note?.sourcePages, [1])
+    XCTAssertTrue(note?.reviewNote?.hasPrefix("NEEDS REVIEW") == true, note?.reviewNote ?? "")
+    XCTAssertEqual(saver.lastPage?.problems.last?.label, "1(a) p2")
+    XCTAssertTrue(model.guide.contains("Left out unreadable: page 1"), model.guide)
+    let calls = await solver.calls
+    XCTAssertEqual(calls, 2, "The unreadable photo is never sent again.")
+    model.stop()
+  }
+  func testHandsFreeSolveFailureWaitsForThumbsUpToRetry() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: goodSample())
+    let solver = FakePageSolver(failFirstAttemptOfPage: 1), saver = FakeSolutionSaver()
+    let model = makeModel(camera, analyzer, solver, saver)
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await sendStableFrames(camera, model: model)
+    await waitUntil { model.phase == .awaitingNext }
+    model.handle(.finish)
+    await waitUntil { model.phase == .awaitingNext && camera.starts == 2 }
+    XCTAssertTrue(model.guide.contains("thumbs-up to try again"), model.guide)
+    await analyzer.setContent(0.3)
+    for _ in 0..<10 { camera.onFrame?(paperImage().cgImage!); try await Task.sleep(for: .milliseconds(350)) }
+    XCTAssertEqual(model.phase, .awaitingNext, "Waiting for a gesture, not a page turn.")
+    model.handle(.finish)
+    await waitUntil { model.phase == .finished }
+    XCTAssertEqual(saver.saves, 1); XCTAssertEqual(camera.captures, 1)
+    model.stop()
+  }
+  func testSidewaysThumbsMoveToTheNextPageAndRetakeThePreviousOne() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: goodSample()), solver = FakePageSolver(), saver = FakeSolutionSaver()
+    let model = makeModel(camera, analyzer, solver, saver)
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await sendStableFrames(camera, model: model)
+    await waitUntil { model.phase == .awaitingNext }
+    func hold(_ gesture: HandGesture, until done: () -> Bool) async throws {
+      await analyzer.setGesture(gesture)
+      for _ in 0..<10 where !done() { camera.onFrame?(paperImage().cgImage!); try await Task.sleep(for: .milliseconds(350)) }
+      await analyzer.setGesture(nil)
+    }
+    try await hold(.thumbsRight) { model.phase == .seeking }
+    XCTAssertEqual(model.phase, .seeking, "👉 skips waiting for a page turn.")
+    try await sendStableFrames(camera, model: model, count: 12)
+    await waitUntil { model.pages.count == 2 && model.phase == .awaitingNext }
+    let second = model.pages[1].id
+    try await hold(.thumbsLeft) { model.phase == .seeking }
+    XCTAssertEqual(model.phase, .seeking, "👈 retakes the page just scanned.")
+    try await sendStableFrames(camera, model: model, count: 12)
+    await waitUntil { model.phase == .awaitingNext && model.pages.last?.id != second }
+    XCTAssertEqual(model.pages.count, 2, "A retake replaces the page instead of adding one.")
+    XCTAssertNotEqual(model.pages[1].id, second); XCTAssertEqual(camera.captures, 3)
+    model.stop()
+  }
+  func testPreviousStepsBackAndWaitsForThatPageBeforeCapturing() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: goodSample()), solver = FakePageSolver(), saver = FakeSolutionSaver()
+    let model = makeModel(camera, analyzer, solver, saver)
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await sendStableFrames(camera, model: model)
+    await waitUntil { model.phase == .awaitingNext }
+    model.handle(.next)
+    try await sendStableFrames(camera, model: model)
+    await waitUntil { model.pages.count == 2 && model.phase == .awaitingNext }
+    let original = model.pages.map(\.id)
+    model.handle(.previous); XCTAssertEqual(model.phase, .seeking) // page 2, still in view
+    model.handle(.previous) // one more page back: page 1 is not in view
+    XCTAssertTrue(model.guide.contains("Retaking page 1"), model.guide)
+    model.handle(.previous); XCTAssertTrue(model.guide.contains("page 1"), "There is nothing before page 1. \(model.guide)")
+    try await sendStableFrames(camera, model: model, count: 7)
+    XCTAssertEqual(camera.captures, 2, "Page 2, still in front of the wearer, is not saved as page 1.")
+    await analyzer.setContent(0.3) // turned back to page 1
+    try await sendStableFrames(camera, model: model, count: 20)
+    await waitUntil { model.phase == .awaitingNext && model.pages.first?.id != original[0] }
+    XCTAssertEqual(model.pages.count, 2); XCTAssertEqual(model.pages[1].id, original[1])
+    XCTAssertNotEqual(model.pages[0].id, original[0])
+    XCTAssertTrue(model.guide.contains("thumbs-right"), "Fixed an earlier page: wait for 👉 at the next new page. \(model.guide)")
+    model.stop()
+  }
+  func testLaunchShortcutStartsScanningOnceTheAppIsActive() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), FakePageSolver(), FakeSolutionSaver())
+    model.startFromShortcut(); XCTAssertEqual(model.phase, .idle, "Nothing starts without a shortcut request.")
+    model.requestShortcutStart(); XCTAssertTrue(model.shortcutPending); XCTAssertEqual(model.shortcutRequests, 1)
+    model.startFromShortcut(); XCTAssertFalse(model.shortcutPending)
+    await waitUntil { model.phase == .seeking }
+    XCTAssertEqual(camera.starts, 1)
+    model.requestShortcutStart(); model.startFromShortcut()
+    try await Task.sleep(for: .milliseconds(200))
+    XCTAssertEqual(camera.starts, 1, "A second shortcut press while scanning does not restart the camera.")
+    XCTAssertEqual(model.phase, .seeking); model.stop()
   }
   func testFixingOnePageAfterThePDFResolvesOnlyItsNeighborhood() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
@@ -592,7 +712,7 @@ final class AutoScanTests: XCTestCase {
     try await sendStableFrames(camera, model: model)
     await waitUntil { model.phase == .awaitingNext }
     let firstID = model.pages[0].id
-    camera.onCommand?(.retakeLast)
+    camera.onCommand?(.previous)
     XCTAssertEqual(model.phase, .seeking)
     try await sendStableFrames(camera, model: model)
     await waitUntil { model.phase == .awaitingNext && model.pages.first?.id != firstID }
@@ -617,18 +737,25 @@ final class AutoScanTests: XCTestCase {
     XCTAssertEqual(camera.captures, 2); XCTAssertEqual(saver.sourceCount, 1, "The unclear photo is not added.")
     model.stop()
   }
-  func testRetakingAnEarlierPageWaitsInsteadOfAppendingTheNextSheet() async throws {
+  func testRetakingAnEarlierPageWaitsForThumbsRightInsteadOfAppendingTheNextSheet() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: goodSample())
     let solver = FakePageSolver(), saver = FakeSolutionSaver()
-    let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), solver, saver)
+    let model = makeModel(camera, analyzer, solver, saver)
     for count in 1...3 { model.importPhoto(camera.data); await waitUntil { model.pages.count == count && model.phase == .idle } }
     let original = model.pages.map(\.id)
     model.start(replacing: 0); await waitUntil { model.phase == .seeking }
     try await sendStableFrames(camera, model: model)
-    await waitUntil { model.phase == .idle && model.pages.first?.id != original[0] }
-    XCTAssertEqual(model.phase, .idle, model.guide)
+    await waitUntil { model.phase == .awaitingNext && model.pages.first?.id != original[0] }
+    XCTAssertEqual(model.phase, .awaitingNext, model.guide)
     XCTAssertEqual(model.pages.count, 3); XCTAssertEqual(Array(model.pages.map(\.id).dropFirst()), Array(original.dropFirst()))
-    XCTAssertTrue(model.guide.contains("replaced"), model.guide)
+    XCTAssertTrue(model.guide.contains("replaced") && model.guide.contains("thumbs-right"), model.guide)
+    // Turning to page 2 (already scanned) must not add it again; the camera stays on for 👉 or 👍.
+    await analyzer.setContent(0.3)
+    for _ in 0..<10 { camera.onFrame?(paperImage().cgImage!); try await Task.sleep(for: .milliseconds(350)) }
+    XCTAssertEqual(model.phase, .awaitingNext); XCTAssertEqual(camera.captures, 1)
+    model.handle(.next); XCTAssertEqual(model.phase, .seeking)
+    XCTAssertTrue(model.guide.contains("Page 4"), model.guide)
     model.stop()
   }
   func testQuestionSkippedByBothNeighborsIsClaimedBeforeThePDF() async throws {
@@ -804,11 +931,14 @@ private actor FakePageSolver: PageSolving {
   let failure: (any Error)?
   let failFirstAttemptOfPage: Int?
   let orphanOnPage: Int?
+  let unreadableOnceOnPage: Int?
   private(set) var calls = 0
   private(set) var jobs: [PageJob] = []
   private var failedOnce = false
-  init(delay: Bool = false, failure: (any Error)? = nil, failFirstAttemptOfPage: Int? = nil, orphanOnPage: Int? = nil) {
+  init(delay: Bool = false, failure: (any Error)? = nil, failFirstAttemptOfPage: Int? = nil, orphanOnPage: Int? = nil,
+       unreadableOnceOnPage: Int? = nil) {
     self.delay = delay; self.failure = failure; self.failFirstAttemptOfPage = failFirstAttemptOfPage; self.orphanOnPage = orphanOnPage
+    self.unreadableOnceOnPage = unreadableOnceOnPage
   }
   func solve(_ job: PageJob, configuration: SolverConfiguration,
              progress: @escaping @Sendable (String) -> Void) async throws -> PageResult {
@@ -817,6 +947,9 @@ private actor FakePageSolver: PageSolving {
     if let failure { throw failure }
     if job.number == failFirstAttemptOfPage && !failedOnce {
       failedOnce = true; throw SolverError.message("Page \(job.number): service unavailable.")
+    }
+    if job.number == unreadableOnceOnPage && !failedOnce {
+      failedOnce = true; throw AIResultError.unreadable("Page \(job.number): the bottom line is cut off.")
     }
     let item = PageSolutionItem(label: "1(a) p\(job.number)", problem: "2x + 3 = 11 on page \(job.number)",
       steps: ["Subtract 3.", "Divide by 2."], answer: "x = 4", check: "2 × 4 + 3 = 11", status: "solved",

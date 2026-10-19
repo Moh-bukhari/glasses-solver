@@ -60,6 +60,13 @@ jobs:
             -scheme CameraAccess -configuration Release -sdk iphoneos \
             -destination 'generic/platform=iOS' -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build 2>&1 | tee build.log
+      - name: Check the Start Glasses Scan shortcut is in the app
+        run: |
+          # App Shortcuts are read from metadata extracted at build time; without it the Action button cannot find the shortcut.
+          app=build/Build/Products/Release-iphoneos/CameraAccess.app
+          find "$app" -name '*.appintents' -maxdepth 2 | tee appintents.txt
+          test -s appintents.txt
+          while read -r dir; do grep -rl "StartScanIntent" "$dir"; done < appintents.txt | grep .
       - name: Package for iloader
         run: |
           mkdir -p package/Payload

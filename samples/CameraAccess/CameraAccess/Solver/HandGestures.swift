@@ -13,6 +13,8 @@ import ImageIO
 // Coordinates follow Vision: normalized to the processed image, origin at the LOWER-LEFT corner, +y up
 // (WWDC20 10653 "Detect Body and Hand Pose with Vision"; VNDetectedObjectObservation.boundingBox docs).
 // All geometry is done in isotropic units of the image's short side, so a 720x1280 frame is not distorted.
+// The glasses camera faces forward and is assumed unmirrored (like a phone's rear camera), so image right is the
+// wearer's right. Verify once on the glasses: a thumb to your right must classify as thumbsRight.
 
 /// The 21 landmarks of VNHumanHandPoseObservation.JointName as an app-owned Sendable enum.
 enum HandJoint: String, CaseIterable, Sendable {
@@ -39,10 +41,18 @@ struct HandPose: Sendable, Equatable {
   var chirality: HandChirality = .unknown
 }
 
+/// One gesture family, a fist with a straight thumb, named by where the thumb points in the image. Which command
+/// each one triggers is the coordinator's choice: thumbs up = start solving, thumbs right = next page,
+/// thumbs left = previous page, thumbs down = previous page (alias).
 enum HandGesture: String, CaseIterable, Sendable {
-  case thumbsUp    // finish scanning and solve
-  case thumbsDown  // retake the last saved page
-  case openPalm    // next page now (opt-in; see HandGestureClassifier.enabled)
+  case thumbsUp     // thumb toward image up
+  case thumbsDown   // thumb toward image down
+  case thumbsRight  // thumb toward image right = the wearer's right
+  case thumbsLeft   // thumb toward image left = the wearer's left
+  case openPalm     // opt-in; see HandGestureClassifier.enabled
+
+  /// The four thumb directions; the classifier's default set.
+  static let thumbs: Set<HandGesture> = [.thumbsUp, .thumbsDown, .thumbsRight, .thumbsLeft]
 }
 
 struct HandGestureEvaluation: Sendable, Equatable {
@@ -54,7 +64,7 @@ struct HandGestureEvaluation: Sendable, Equatable {
 }
 
 /// Single-frame, rule-based classifier. Every rule is scale invariant (distances divided by palm length)
-/// and rotation invariant except the explicit "up/down" tests. Thresholds are tuning values, not Apple facts.
+/// and rotation invariant except the explicit thumb-direction tests. Thresholds are tuning values, not Apple facts.
 struct HandGestureClassifier: Sendable {
   struct Thresholds: Sendable, Equatable {
     /// Wrist, thumb MP/IP/tip, index/middle/little MCP must all reach this confidence.
@@ -77,7 +87,11 @@ struct HandGestureClassifier: Sendable {
     var maxThumbBend = 40.0
     /// Thumb MP -> tip within 40 degrees of image up (thumbs up) or image down (thumbs down).
     var thumbAxisTolerance = 40.0
-    /// Thumb tip must lead every non-thumb joint along the up/down axis by 0.25 palms.
+    /// Thumb MP -> tip within 35 degrees of image right (thumbs right) or image left (thumbs left). Keep
+    /// thumbAxisTolerance + thumbSideTolerance < 90 so the cones never overlap: with 40 + 35, a thumb 35-50 degrees
+    /// from horizontal (every diagonal, including 45) matches no direction.
+    var thumbSideTolerance = 35.0
+    /// Thumb tip must lead every non-thumb joint along the matched axis (up, down, right or left) by 0.25 palms.
     var thumbLead = 0.25
     /// Thumb tip at least 0.45 palms from index/middle PIP/DIP/tip (rejects pinch and key grips on paper).
     var thumbClearance = 0.45
@@ -91,12 +105,12 @@ struct HandGestureClassifier: Sendable {
   /// Open palm depends on Vision's chirality semantics; keep it opt-in until verified on the glasses.
   var enabled: Set<HandGesture>
 
-  init(thresholds: Thresholds = Thresholds(), enabled: Set<HandGesture> = [.thumbsUp, .thumbsDown]) {
+  init(thresholds: Thresholds = Thresholds(), enabled: Set<HandGesture> = HandGesture.thumbs) {
     self.thresholds = thresholds
     self.enabled = enabled
   }
 
-  /// One gesture per frame. Hands that disagree (e.g. one thumbs up, one thumbs down) yield nil.
+  /// One gesture per frame. Hands that disagree (e.g. one thumbs right, one thumbs left) yield nil.
   func classify(_ hands: [HandPose], imageWidth: Int, imageHeight: Int) -> HandGesture? {
     let found = Set(hands.compactMap { evaluate($0, imageWidth: imageWidth, imageHeight: imageHeight).gesture })
     return found.count == 1 ? found.first : nil
@@ -162,7 +176,8 @@ struct HandGestureClassifier: Sendable {
   }
 
   /// Fist (index + middle curled, ring/little not extended, at least one of them curled) with a straight,
-  /// long thumb pointing up or down, clear of the fingers and beyond every other joint.
+  /// long thumb pointing up, down, right or left, clear of the fingers and beyond every other joint.
+  /// The same fist, length, straightness and clearance rules apply to every direction; only the axis differs.
   private func thumbGesture(points p: [HandJoint: HandVector], wrist: HandVector, palm: Double,
                             states: [Finger: FingerState]) -> HandGesture? {
     let t = thresholds
@@ -176,14 +191,23 @@ struct HandGestureClassifier: Sendable {
     let neighbors: [HandJoint] = [.indexPIP, .indexDIP, .indexTip, .middlePIP, .middleDIP, .middleTip]
     let clearance = neighbors.compactMap { p[$0] }.map { tip.distance(to: $0) }.min() ?? 0
     guard clearance >= t.thumbClearance * palm else { return nil }
-    let others = p.filter { !Self.thumbJoints.contains($0.key) }.map { $0.value.y }
-    guard let highest = others.max(), let lowest = others.min() else { return nil }
-    if HandVector.angle(thumb, HandVector(x: 0, y: 1)) <= t.thumbAxisTolerance,
-      tip.y - highest >= t.thumbLead * palm { return .thumbsUp }
-    if HandVector.angle(thumb, HandVector(x: 0, y: -1)) <= t.thumbAxisTolerance,
-      lowest - tip.y >= t.thumbLead * palm { return .thumbsDown }
-    return nil
+    let others = p.filter { !Self.thumbJoints.contains($0.key) }.map(\.value)
+    guard !others.isEmpty else { return nil }
+    // Exactly one direction may match. With non-overlapping cones at most one can; if the tolerances are ever
+    // tuned to overlap, an ambiguous thumb still yields nil instead of the first cone checked.
+    let matches = Self.thumbDirections.filter { direction in
+      let tolerance = direction.axis.x == 0 ? t.thumbAxisTolerance : t.thumbSideTolerance
+      guard HandVector.angle(thumb, direction.axis) <= tolerance,
+        let front = others.map({ $0.dot(direction.axis) }).max() else { return false }
+      return tip.dot(direction.axis) - front >= t.thumbLead * palm
+    }
+    return matches.count == 1 ? matches[0].gesture : nil
   }
+
+  /// Image directions (unit vectors, +y up) a thumb can point, and the gesture each one is.
+  private static let thumbDirections: [(gesture: HandGesture, axis: HandVector)] = [
+    (.thumbsUp, HandVector(x: 0, y: 1)), (.thumbsDown, HandVector(x: 0, y: -1)),
+    (.thumbsRight, HandVector(x: 1, y: 0)), (.thumbsLeft, HandVector(x: -1, y: 0))]
 
   /// All four fingers extended and spread, pointing up, thumb abducted, palm (not back of hand) toward the camera.
   private func isOpenPalm(points p: [HandJoint: HandVector], wrist: HandVector, palm: Double,
@@ -237,6 +261,7 @@ private struct HandVector: Sendable, Equatable {
   var length: Double { hypot(x, y) }
   func distance(to other: HandVector) -> Double { (self - other).length }
   func cross(_ other: HandVector) -> Double { x * other.y - y * other.x }
+  func dot(_ other: HandVector) -> Double { x * other.x + y * other.y }
   /// Unsigned angle between two vectors in degrees (180 when either is zero length).
   static func angle(_ a: HandVector, _ b: HandVector) -> Double {
     let la = a.length, lb = b.length
@@ -251,6 +276,8 @@ private struct HandVector: Sendable, Equatable {
 /// Fires a gesture only after it is seen in `requiredFrames` consecutive analyses spanning `minimumHold`
 /// seconds. Any other result, a gap, or `allowed == false` restarts the hold. After firing, nothing fires
 /// during `cooldown`, and the same gesture must disappear for `releaseFrames` analyses before it can fire again.
+/// Thumb directions are different gestures: turning the thumb from up to right restarts the hold, so a turn fires at
+/// most the direction that is then held for the full hold, and a second direction needs the cooldown plus its own hold.
 struct GestureGate: Sendable {
   struct Configuration: Sendable, Equatable {
     var requiredFrames = 4                 // at ~3 Hz: 0, 0.33, 0.66, 0.99 s

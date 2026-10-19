@@ -8,7 +8,7 @@ final class GlassesInputTests: XCTestCase {
     XCTAssertEqual(ScanCommand.glasses(.select(source: .captouch, timestampMs: 1)), .finish)
     XCTAssertEqual(ScanCommand.glasses(.capture(.doublePress, source: .captureButton, timestampMs: 1)), .finish)
     XCTAssertEqual(ScanCommand.glasses(.capture(.shortPress, source: .captureButton, timestampMs: 1)), .next)
-    XCTAssertEqual(ScanCommand.glasses(.capture(.hold, source: .captureButton, timestampMs: 1)), .retakeLast)
+    XCTAssertEqual(ScanCommand.glasses(.capture(.hold, source: .captureButton, timestampMs: 1)), .previous)
     XCTAssertEqual(ScanCommand.glasses(.button(.action, source: .actionButton, timestampMs: 1)), .finish)
   }
   func testSwipesBackAndOtherSourcesAreIgnored() {
