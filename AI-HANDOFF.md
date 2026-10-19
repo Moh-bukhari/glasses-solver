@@ -8,13 +8,13 @@ Start here when continuing this project. This file records the product intent, c
 
 | Item | Where / purpose |
 | --- | --- |
-| Active app branch | 2.0 is on [`claude/pensive-allen-ggkllj`](https://github.com/Moh-bukhari/glasses-solver/tree/claude/pensive-allen-ggkllj). 1.3.1 and earlier are on [`solver-app`](https://github.com/Moh-bukhari/glasses-solver/tree/solver-app). Merge or retarget as the user decides. |
+| Active app branch | 2.1 (and 2.0) are on [`claude/pensive-allen-ggkllj`](https://github.com/Moh-bukhari/glasses-solver/tree/claude/pensive-allen-ggkllj). 1.3.1 and earlier are on [`solver-app`](https://github.com/Moh-bukhari/glasses-solver/tree/solver-app). Merge or retarget as the user decides. |
 | Default GitHub branch | `main`. It holds the upstream Meta sample baseline and pointers to this guide. |
 | Earlier draft PR | [Moh-bukhari/glasses-solver#1](https://github.com/Moh-bukhari/glasses-solver/pull/1). Check its current state before continuing. |
 | User installation and operation | [SOLVER-SETUP.md](SOLVER-SETUP.md) |
 | Repository and SDK instructions | [AGENTS.md](AGENTS.md). The upstream Meta reference follows the Glasses Solver entry point. |
 | Lessons from actual failures | [tasks/lessons.md](tasks/lessons.md) |
-| **Current acceptance contract** | [tasks/one-button-gesture-spec.md](tasks/one-button-gesture-spec.md) (2.0) |
+| **Current acceptance contract** | [tasks/handsfree-gesture-spec.md](tasks/handsfree-gesture-spec.md) (2.1 controls), on top of [tasks/one-button-gesture-spec.md](tasks/one-button-gesture-spec.md) (2.0 capture, solving, PDF) |
 | Superseded contracts | [tasks/batch-solver-spec.md](tasks/batch-solver-spec.md) (1.3 batch pipeline) and [tasks/auto-scan-spec.md](tasks/auto-scan-spec.md) (single photo) |
 | Earlier crash investigation | [tasks/scan-start-crash-spec.md](tasks/scan-start-crash-spec.md) |
 | Documentation contract | [tasks/ai-handoff-spec.md](tasks/ai-handoff-spec.md) |
@@ -25,11 +25,11 @@ For an existing checkout, inspect its branch and uncommitted work first, fetch t
 
 The user has an **iPhone, a Windows laptop, and Ray-Ban Meta Gen 2 glasses with developer mode** (camera, open-ear speakers, touchpad, capture button, no display). The desired experience:
 
-- Press **one button** and look at each page.
+- Start with **one button or a phone shortcut** (Action button, Back Tap, Control Center, Siri), then look at each page.
 - The app captures each page when it has a good view.
-- A **thumbs-up** (or a click on the glasses) finishes.
+- **Never take out the phone** during a packet: hand gestures only. 👍 start solution, 👉 next page, 👈 (or 👎) previous page. The glasses buttons did not work for the user.
 - One worked-solution PDF arrives on the iPhone **fast**.
-- Control is **silent**: gestures and glasses clicks, not voice. The app still gives every instruction needed.
+- Control is **silent**: gestures, not voice. The app still gives every instruction needed.
 - The user asked for **GPT-6.1 Sol** for OpenAI and **Claude Opus 5.5** for Claude, and doesn't mind which provider is used.
 
 There is no Windows, Raspberry Pi or hosted backend. The iPhone coordinates capture, analyzes images locally, calls the AI APIs directly, and generates the PDF.
@@ -39,13 +39,14 @@ Preserve these decisions:
 - **Usable photos.** A usable photo shows the complete problem clearly. Don't require a clean background, all four corners, centering, or perspective correction.
 - **Readability gates.** Forgiving framing still rejects tiny, distant writing and gross blur or darkness. Never raise the capture rate by weakening the detail check.
 - **Directions.** Give specific directions relative to the wearer's camera, then "hold still". Announce the shutter ("Got it"), saved pages, and solving/PDF progress.
-- **No voice control.** Controls are on-device hand gestures (thumbs-up = finish, thumbs-down = retake last) and glasses clicks through experimental Meta Inputs, plus the screen. Voice commands stay optional and off by default.
+- **Gestures are the controls.** On-device hand gestures: a fist with the thumb up (finish), right (next page or take this page now), left or down (previous page: retake the page just saved; repeat to step back). The screen still works. Glasses buttons (experimental Meta Inputs) are an opt-in that defaults off, because they did not reach the app on the user's glasses. Voice commands stay optional and off by default.
+- **Hands-free recovery.** Nothing that happens during a camera scan may require the phone. An unreadable page is asked for again through the glasses after Finish (👍 solves without it), a solve failure waits with the camera on for 👍 to retry, and a middle-page retake keeps the camera on and waits for 👉. Retakes of a page not in view capture only after the view changes.
 - **Reserved touchpad gestures.** A single tap and tap-and-hold belong to the glasses: they pause/resume and stop the session. Never ask the user to single-tap as a command.
 - **Silent audio.** Speech runs at 5% utterance gain through the glasses/Bluetooth route only, by default, using the `.playback` category so the Silent switch doesn't mute it.
 - **Speed first.** Solve each page with one streaming request, with its previous and next pages as context, and start while scanning (option "Solve pages while scanning", on by default). This intentionally replaces the 1.3 rule "collect everything, upload only after Finish". The setting restores upload-at-Finish behavior.
 - **One provider by default; never a silent downgrade.** Cross-check mode uses both providers and must not quietly fall back when a key is missing or one provider fails.
 - **Coverage.** Each page answer includes a checklist of every visible label. Every label is solved or explicitly skipped as belonging to the previous page. Unresolved items show as NEEDS REVIEW. This is not proof of mathematical correctness.
-- **No partial PDFs.** A failed page stops PDF creation with page-specific retake or retry instructions. Solved pages stay cached, and a retry re-solves only the failed ones.
+- **No silent partial PDFs.** A failed page stops PDF creation with page-specific retake or retry instructions. Solved pages stay cached, and a retry re-solves only the failed ones. The only exception is the wearer's explicit 👍 while asked for an unreadable page: that page is left out and shown in the PDF as a NEEDS REVIEW placeholder with its photo.
 - **Draft retention.** Saved pages survive errors, pauses and app restarts, and a replacement never deletes the old photo first. After a successful PDF the packet stays and is marked solved (`ScanDraft/solved`), so one page can be retaken and the PDF rebuilt from cached answers. Start, or a new photo, begins a new packet. The originals are also copied into the Solutions folder.
 - **Lock-safe drafts.** Draft files use until-first-unlock file protection, and 1.x drafts are migrated on load, so solving and PDF creation survive a locked phone.
 
@@ -54,8 +55,10 @@ Preserve these decisions:
 | Area | Status at this snapshot |
 | --- | --- |
 | One-button capture, shutter cue, overlapped still check, per-frame analysis | Implemented; coordinator tests pass in simulator CI |
-| Hand gestures (thumbs-up/down) | Implemented. The classifier and timing gate pass 18 fixture tests; coordinator gesture tests pass. Thresholds are untested on real egocentric frames. |
-| Glasses buttons (Meta Inputs, experimental) | Implemented. Mapping unit tests pass; a mock-glasses activation test is in the suite. Whether real Gen 2 glasses and this app ID deliver Inputs events is **unverified**. |
+| Hand gestures (thumb up/right/left/down) | Implemented in 2.1. The classifier and timing gate pass 24 Linux fixture tests (26 in Xcode with the Vision cases); coordinator gesture tests pass. Thresholds and the unmirrored-camera assumption (image right = wearer's right) are untested on real egocentric frames. |
+| Hands-free recovery (unreadable page re-ask, solve-failure standby, middle-page retake hold, step-back retakes) | Implemented in 2.1 with coordinator tests. Not yet tried on glasses. |
+| Start shortcut (App Intent, `glassessolver://scan`) | Implemented in 2.1. CI checks that the App Intents metadata in the built app contains `StartScanIntent`. Registration for a sideloaded app and the Action button / Back Tap setup are **unverified on a device**. |
+| Glasses buttons (Meta Inputs, experimental) | Implemented but **off by default** in 2.1 (the user reported buttons don't work). Mapping unit tests and the mock-glasses activation test remain. |
 | Per-page streaming solving, retries, repair, cache, cross-check | Implemented. The Claude and OpenAI SSE parsers, retry and repair bounds, and request bodies are covered by tests. **No paid live API call has been made.** |
 | Default migration to `gpt-6.1-sol` / `claude-opus-5-5` | Implemented and tested |
 | PDF | JPEG-backed source previews decoded off the main actor; coverage summary; up to 300 solution pages |
@@ -85,34 +88,34 @@ History: the user confirmed that 1.x glasses capture and PDF generation worked. 
 
 ### Scan and solve
 
-1. Tap **Start scanning**. Voice permissions are requested only if Voice commands is on. The camera starts and you hear "Ready".
-2. Follow the quiet directions. When the stability gate latches the app says "Hold still"; at the shutter (first transfer byte) it says "Got it" and the wearer may turn the page. After the check you hear "Page N saved".
-3. Changed writing re-arms capture automatically. To force it, press the capture button once (next page / take now).
+1. Run the **Start Glasses Scan** shortcut (Action button, Back Tap, Control Center, Siri "Start a scan in Glasses Solver", or `glassessolver://scan`), or tap **Start scanning**. The shortcut opens the app on Auto Scan and starts once the app is active: it continues an unsolved packet, or starts a new one after a PDF. Voice permissions are requested only if Voice commands is on. The camera starts and you hear "Ready".
+2. Follow the quiet directions. When the stability gate latches the app says "Hold still"; at the shutter (first transfer byte) it says "Got it" and the wearer may turn the page. After the check you hear "Page N saved" (the first time also "Thumbs-left retakes it, thumbs-up finishes").
+3. Changed writing re-arms capture automatically. 👉 arms the next page now (look-alike pages) or takes the page in view now.
 4. Meanwhile, page N−1 is solved in the background as soon as page N is saved. Thumbnails show waiting/queued/solving/solved/failed.
-5. Finish with a thumbs-up (held about 1 s), a touchpad double-tap, a capture-button double-press, or **Done · Solve**. To retake the last page: thumbs-down or hold the capture button.
+5. Finish with 👍 (held about 1 s) or **Done · Solve**.
 6. Finish solves the last page, plus any page still queued, failed or in flight. Then it re-solves once any page whose skipped item no earlier page solved. The PDF opens automatically; the packet stays fixable until the next Start.
 
-### Correct and recover
+### Correct and recover (no phone needed during a glasses scan)
 
-- **Middle pages.** Pause, then use the queue's **Retake**, **Replace photo** or **Remove**. Only the pages whose context changed are re-solved.
-- **Unreadable page.** It is announced during scanning and stops Finish with "Page N: … Retake that page with the Retake button…". Resending the same photo is pointless.
-- **Transient errors.** Retried automatically, twice. Finishing again re-solves only failed pages.
-- **After the PDF.** Retake or Replace a page, then Done: only that page and the neighbors whose context changed are re-solved.
-- **No key.** Start announces that pages will only be saved. A failed Finish is spoken and reopens Settings every time.
-- **Tab switch or backgrounding.** Stops the camera, never solving. A background-task assertion buys extra time; a suspended request fails and can be retried.
+- **Retake.** 👈 (or 👎) retakes the page just saved; each further 👈 steps one page back. A page not in view is captured once the view changes (or 6 s after a reference view, if it was already shown). After an earlier page is replaced, the camera waits for 👉 at the first new page (page turns would re-add scanned sheets) or 👍.
+- **Unreadable page.** Announced during scanning ("I'll ask for it again when you finish"). After 👍 the camera restarts and asks for it ("Show page N again, or thumbs-up to solve without it"); solving resumes after the retake. 👍 leaves it out with a NEEDS REVIEW placeholder. Imported photos keep the phone flow (Retake button advice).
+- **Transient errors.** Retried automatically, twice. Still failing after a glasses scan: the reason is spoken, the camera stays on, and 👍 retries only failed pages.
+- **After the PDF.** Retake (phone) or Replace a page; after the retake the camera waits for 👍 to rebuild. Only that page and the neighbors whose context changed are re-solved.
+- **No key.** Start announces that pages will only be saved. A failed Finish is spoken and reopens Settings every time (needs the phone).
+- **Tab switch, backgrounding or 5 idle minutes.** Stops the camera, never solving. A background-task assertion buys extra time; a suspended request fails and can be retried. Run the shortcut again to continue.
 
 ## 5. How the capture workflow works
 
-`AutoScanModel` is the MainActor coordinator. A per-run `runID` invalidates late callbacks.
+`AutoScanModel` is the MainActor coordinator. A per-run `runID` invalidates late callbacks. Hands-free state: `handsFree` (this packet is scanned with the glasses), `fixing` (asking again for unreadable pages after Finish via `startFix`/`askAgain`), `unclear` (page id → the AI's retake advice; a retake's new page id clears it), `leftOut` (unreadable pages the wearer chose to solve without), `lastSaved`, `holdForNext`, `armAfterTurn`/`armGate`/`recentViews`, and the shortcut request (`requestShortcutStart`, `startFromShortcut`).
 
 | Phase | Work / next step |
 | --- | --- |
 | `idle` | Ready, paused, or imported photos awaiting Finish |
 | `connecting` | Optionally prepare voice, wait for the device, request camera permission, start the SDK camera |
-| `seeking` | Analyze preview frames (every frame, one in flight) for stability, framing and gestures |
+| `seeking` | Analyze preview frames (every frame, one in flight) for stability, framing and gestures. A retake of a page not in view first waits for the view to change (`armAfterTurn`). |
 | `capturing` | Request the full still; `onShutter` fires on the first transfer byte |
 | `checking` | Check and save the still while the preview restarts in parallel |
-| `awaitingNext` | Wait for a changed page, the capture button, or a finish gesture |
+| `awaitingNext` | Wait for a changed page or a gesture. With `holdForNext` (after fixing an earlier page, or the solve-failure standby) only gestures act. |
 | `solving` | Wait for the remaining page jobs |
 | `saving` | Combine results and write the PDF and originals |
 | `finished` | PDF presented; packet kept and marked solved until the next Start, a new photo, or New packet |
@@ -138,7 +141,9 @@ Tuning values:
 | Stable hold | 1.0 s only when clearly readable (cue hold, sharpness ≥0.0005, contrast ≥0.036, line ≥14 px). Otherwise 1.5 s with a hold cue, or 3 s; at least 5 samples. |
 | Still check | Stills with a long edge ≥2000 px are checked at half size, but only when text is found, the view is acceptable, and the line is ≥20 px. Otherwise the exact full-resolution check runs. Original JPEG bytes are kept. |
 | Page turn | ≥2 s after the latch, then 3 changed usable frames spanning ≥0.4 s, with no command hand. Thresholds: content fingerprint 0.065, full-frame fallback 0.20 |
-| Gestures | Palm ≥15% of the short side, joints away from edges, fist plus straight thumb within 40° of vertical, clear of the fingers. Fires after 4 consecutive analyses spanning ≥0.9 s, then a 2 s cooldown and a release. A raised command hand resets the capture hold. |
+| Gestures | Palm ≥15% of the short side, joints away from edges, fist plus a straight thumb clear of the fingers, pointing within 40° of vertical (up/down) or 35° of horizontal (right/left) and leading every other joint by 0.25 palms. Diagonals match nothing. Thumbs down is fed to the gate as thumbs left (both "previous"). Fires after 4 consecutive analyses spanning ≥0.9 s, then a 2 s cooldown and a release. A raised command hand resets the capture hold. |
+| Retake of a page not in view | Page-turn check against the last clear, hand-free view from ≥1.5 s before the gesture (or the first clear frame after a camera restart), ≥2 s guard; else captured 6 s after the reference. 👉 skips the wait. |
+| Inactivity | The camera stops after 5 minutes without a saved page, gesture or command. |
 | Unclear stills | Never end a hands-free run; the app keeps guiding. Three consecutive transfer failures stop with pages kept. |
 
 These are heuristics. Tune them against real photos and logs, not by guessing.
@@ -220,9 +225,11 @@ All paths are relative to the repository root.
 | File | Responsibility / key types |
 | --- | --- |
 | [CameraAccessApp.swift](samples/CameraAccess/CameraAccess/CameraAccessApp.swift) | App entry; `Wearables.configure()`; debug mock support |
-| [MainAppView.swift](samples/CameraAccess/CameraAccess/Views/MainAppView.swift) | Auto Scan / Glasses / PDFs tabs |
-| [AutoScanView.swift](samples/CameraAccess/CameraAccess/Solver/AutoScanView.swift) | One-button controls, `ScanViewfinder`, `PageQueueView` with solve badges, settings sheet, lifecycle hooks; `SolutionViewer`, `PDFPreview`, `SolutionHistoryView` |
-| [AutoScanModel.swift](samples/CameraAccess/CameraAccess/Solver/AutoScanModel.swift) | Capture state machine, gesture/glasses/screen command handling, page jobs (`syncJobs`, `startJob`, `advanceFinish`), PDF save, cues |
+| [MainAppView.swift](samples/CameraAccess/CameraAccess/Views/MainAppView.swift) | Auto Scan / Glasses / PDFs tabs; switches to Auto Scan on a shortcut request |
+| [StartScanIntent.swift](samples/CameraAccess/CameraAccess/Solver/StartScanIntent.swift) | `StartScanIntent` (App Intent, `openAppWhenRun`) and `GlassesSolverShortcuts` (`AppShortcutsProvider`) |
+| [RegistrationView.swift](samples/CameraAccess/CameraAccess/Views/RegistrationView.swift) | The app's `onOpenURL`: Meta callbacks, plus `glassessolver://scan` |
+| [AutoScanView.swift](samples/CameraAccess/CameraAccess/Solver/AutoScanView.swift) | One-button controls, `ScanViewfinder` (shows the held gesture), `PageQueueView` with solve badges, gesture help, settings sheet, lifecycle hooks, shortcut start when active; `SolutionViewer`, `PDFPreview`, `SolutionHistoryView` |
+| [AutoScanModel.swift](samples/CameraAccess/CameraAccess/Solver/AutoScanModel.swift) | Capture state machine, gesture/screen command handling (`handle`, `previousPage`, `retake(page:inView:)`), hands-free recovery (`startFix`, `askAgain`, `standby`), page jobs (`syncJobs`, `startJob`, `advanceFinish`), PDF save, cues |
 | [AutoScanCamera.swift](samples/CameraAccess/CameraAccess/Solver/AutoScanCamera.swift) | `ScanCamera`, SDK lifecycle, full still transfer, Inputs attach/re-attach, `ScanCommand.glasses(_:)` mapping, pause-aware waits |
 | [ScanQuality.swift](samples/CameraAccess/CameraAccess/Solver/ScanQuality.swift) | `PageAnalyzer` (text and hand pose), `PageSample`, `ContentFraming`, `StabilityGate`, `PageTurnGate`, `GuidanceSpeechGate` |
 | [HandGestures.swift](samples/CameraAccess/CameraAccess/Solver/HandGestures.swift) | `HandGestureClassifier`, `GestureGate`, `HandPoseVision` adapter |
@@ -245,7 +252,7 @@ New app Swift files must be added to the Sources phase. The test folder is synch
 | Draft | `Documents/ScanDraft/pages.json` plus `<UUID>.jpg`, and a `solved` marker after a PDF. Atomic writes with until-first-unlock protection; a replacement is written before the old photo is deleted. Kept after a PDF until the next Start, a new photo, or New packet. |
 | Finished packet | `Documents/Solutions/<UUID>/Solution.pdf`, `Solution.json`, `Paper.jpg`, `Paper-2.jpg`, … (originals copied) |
 | Keys | Keychain service `GlassesSolver`, accounts `OpenAI` and `Anthropic`, `WhenUnlockedThisDeviceOnly` |
-| Preferences | `solverMode`, `solverModel`, `claudeModel`, `settingsVersion` (2 = migrated; the migration also sets `voiceCommands` off and `solverModeNotice` when cross-check was replaced), `solveWhileScanning`, `handGestures`, `glassesButtons`, `voiceCommands` (default off), `voiceGuidance`, `privateAudio`, `cueVolume` |
+| Preferences | `solverMode`, `solverModel`, `claudeModel`, `settingsVersion` (2 = 2.0 migration: models, `voiceCommands` off, `solverModeNotice` when cross-check was replaced; 3 = 2.1 migration: `glassesButtons` off), `solveWhileScanning`, `handGestures`, `glassesButtons` (default off), `voiceCommands` (default off), `voiceGuidance`, `privateAudio`, `cueVolume` |
 
 - Each key goes only to its own provider.
 - When solving while scanning is on, pages are uploaded during the scan; with it off, nothing is uploaded until Finish.
@@ -272,7 +279,7 @@ xcodebuild test -project samples/CameraAccess/CameraAccess.xcodeproj -scheme Sol
 - The unsigned device build and IPA packaging are unchanged; see the workflow.
 - Keep bundle ID `com.mohbukhari.glassessolver`.
 - **CI triggers:** a push to `solver-app` touching the app or the workflow, or a manual `workflow_dispatch` on any branch. 2.0 was verified through `workflow_dispatch` on its branch.
-- **No Xcode?** A Linux container can still type-check and unit-test the Foundation-only files (`BatchSolver`, `PageSolver`, `HandGestures`) with a Swift toolchain plus small stubs for `URLSession.bytes`, `uploadPhoto` and the `SolvedPage` types. That is useful before CI, but not a substitute for it.
+- **No Xcode?** A Linux container can still type-check and unit-test the Foundation-only files (`BatchSolver`, `PageSolver`, `HandGestures`) with a Swift toolchain plus small stubs for `URLSession.bytes`, `uploadPhoto` and the `SolvedPage` types. For 2.1 the unmodified `AutoScanModel.swift` was also compiled on Linux with stubs (UIKit types, `CGImage`, the `ScanCamera`/`ScanSpeaking` protocols, `ScanQuality` without the Vision analyzer, `ScanDraft` without thumbnails) and the 40 image-free `AutoScanTests` ran there, with images replaced by stub data. That is useful before CI, but not a substitute for it.
 - **Not validated by tests:** paid APIs, real optics, real hands, Bluetooth audio, and real Inputs availability.
 
 ## 10. Troubleshooting and unresolved work
@@ -281,23 +288,26 @@ xcodebuild test -project samples/CameraAccess/CameraAccess.xcodeproj -scheme Sol
 | --- | --- |
 | Still slow | Look at per-page states. A page stuck on "solving" points to provider latency, so check the effort and model. Cross-check mode doubles the rounds. Consider `speed: "fast"` (Claude) or `service_tier` (OpenAI) only after measuring. |
 | HTTP 400 on the first request | Check the model ID, and for Claude 5 whether the account accepts `output_config.effort`. Compare against vendor docs. |
-| Thumbs-up not recognized | Log `HandGestureClassifier.evaluate` rejection reasons (palmSize, nearEdge, noMatch) on real frames. Check that the preview orientation is upright. Tune the thresholds in `HandGestureClassifier.Thresholds`. |
+| A gesture not recognized | Log `HandGestureClassifier.evaluate` rejection reasons (palmSize, nearEdge, noMatch) on real frames. Check that the preview orientation is upright. Tune the thresholds in `HandGestureClassifier.Thresholds`. |
+| Thumb right does "previous" (or left does "next") | The glasses image would be mirrored. Swap the right/left axes in `HandGestureClassifier.thumbDirections` only after confirming on logged frames. |
+| A retake saved the wrong sheet | The arm check compares against the view before the gesture; look-alike sheets don't register a change, and the 6 s fallback then takes the sheet in view. Consider a longer `armTimeout` or a match against the old photo. |
+| Shortcut missing from the Action button | Shortcuts → App Shortcuts → Glasses Solver should list it after the app has run once. Otherwise use a personal shortcut with Open URLs `glassessolver://scan`. |
 | False gestures while holding paper | Raise `minPalm` or `thumbClearance` using logged real frames. The gate already needs about 1 s and a release. |
 | "Glasses buttons are unavailable" | Inputs is experimental and may be gated. Check Meta AI and firmware versions and Developer Center; gestures and the screen still work. |
 | Capture button also takes a native photo | The unrequested photo is ignored by `photoRequested`. Whether a subscribed button suppresses the system photo needs a device check. |
 | Scanning paused | The wearer single-tapped (the glasses' pause). Tap again to continue; waits are pause-aware up to 2 minutes. |
 | Same page captured twice | Page-turn heuristics. The AI also skips repeated questions via the previous-page context, and combine merges a neighbor's identical label and transcription. |
-| "Scanning was stopped from the glasses" | The wearer touched and held the touchpad, the glasses' stop gesture. Tap Continue scanning. |
-| Look-alike pages never turn | The page-turn threshold is a content-fingerprint difference of 0.065. The app hints after 6 s; press the capture button or Next page now. |
+| "Scanning was stopped from the glasses" | The wearer touched and held the touchpad, the glasses' stop gesture. Tap Continue scanning or run the shortcut. |
+| Look-alike pages never turn | The page-turn threshold is a content-fingerprint difference of 0.065. The app hints after 6 s; give 👉 (or tap Next page now). |
 | PDF failed after locking the phone | Draft files should now be until-first-unlock. Check a draft from 1.x was migrated (`ScanDraftStore.load`). |
 | Partial or empty answer | Check the page checklist, skipped reasons, and the repair attempt. An unreadable page names its page. |
 
 Next priorities, **not completed claims**:
 
-1. Run a device test of 2.0: one-button start, quiet directions through the glasses, the shutter cue, a 3–5 page packet, thumbs-up finish, and the PDF arriving about one page-solve after the gesture.
+1. Device test of 2.1 without touching the phone: start from the Action button or Back Tap shortcut, scan 4–6 pages, 👉 on a look-alike page, 👈 to retake the last page and to step back two pages, a deliberately blurred page that the AI flags, 👍 finish, the re-ask for that page, and the PDF. Confirm thumb right registers as right (unmirrored image).
 2. A real-API run with a small known-answer packet on each provider. Measure per-page latency and check continuation and skip handling across a question that spans pages.
-3. Check Inputs on Gen 2: activation, double-tap and capture-button events, and whether a capture press also takes a system photo.
-4. Calibrate the gesture thresholds and the quick-hold and half-size still-check gates from logged real frames.
+3. Calibrate the gesture thresholds (especially sideways thumbs), the retake arm timeout, and the quick-hold and half-size still-check gates from logged real frames.
+4. Glasses-side start: Meta's experimental voice invocation ("Hey Meta, start Glasses Solver", DAT `VoiceInvocationsStream`/`LaunchApp`) needs Developer Center approval; evaluate only if the user wants a one-time spoken launch.
 5. Measure the time from shutter to rearm on the device. The Meta mock reports a critical stream error when the stream restarts after a full photo, and the app then falls back to a full reconnect (`AutoScanModel.resume`). If real glasses do the same, consider BirdSpotter's approach of keeping Photo started and switching only the stream, or recreating only the camera capability.
 
 ## 11. How the next AI should work and leave a handoff

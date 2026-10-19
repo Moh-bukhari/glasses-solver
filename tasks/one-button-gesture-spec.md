@@ -1,5 +1,7 @@
 # One-button, gesture-controlled fast packet solving (2.0)
 
+> **2.1:** the control rules below (thumbs-down, glasses buttons on by default, phone retakes) are superseded by [handsfree-gesture-spec.md](handsfree-gesture-spec.md). Capture, solving and PDF rules still apply.
+
 ## User request (2026-10-19)
 
 Solving showed "solving" and never produced a PDF. The user wants one start button. The app should find each page, capture it once it has a good view, save it, and move on. A thumbs-up in front of the glasses stops scanning and solves; solving each page while scanning and combining at the end is acceptable if it is better. Control must come from hand gestures or clicks on the glasses, not voice, as a silent experience that still gives every needed instruction. It must be fast, with fast PDF generation and fast, reliable multi-page scanning. Use GPT-6.1 Sol (`gpt-6.1-sol`) for OpenAI and Claude Opus 5.5 (`claude-opus-5-5`) for Claude.
