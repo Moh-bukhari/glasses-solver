@@ -203,6 +203,73 @@ final class PageSolvingTests: XCTestCase {
 
   // MARK: Requests
 
+  private func checkAnswer(_ verdict: String = "solvable") -> Data {
+    Data(#"{"blurry":[],"otherSheet":[],"questions":[{"label":"1(a)","read":"m = 2 kg","unclear":""}],"unseen":"","verdict":"\#(verdict)","voice":""}"#.utf8)
+  }
+  func testPageChecksUseTheFastModelAtLowEffortWithTheirOwnSchema() async throws {
+    let answer = checkAnswer()
+    for (mode, model) in [(SolverMode.openAI, "gpt-6-luna"), (.claude, "claude-haiku-5-5")] {
+      let transport = ScriptedTransport([.success(answer)])
+      let configuration = SolverConfiguration(mode: mode, openAIKey: "o", claudeKey: "c")
+      let check = try await PageChecker(transport: transport).check([Data([1]), Data([2])], page: 3, configuration: configuration)
+      XCTAssertTrue(check.clear)
+      let requests = await transport.requests
+      let request = try XCTUnwrap(requests.first)
+      XCTAssertEqual(request.kind, .check); XCTAssertEqual(request.credential.model, model)
+      XCTAssertEqual(request.photos.map(\.label), ["Photo 1 of 2:", "Photo 2 of 2:"])
+      XCTAssertTrue(request.prompt.contains("page 3") && request.prompt.contains("looking at photo 2 now"), request.prompt)
+      let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(SolverClient.request(request).httpBody)) as? [String: Any])
+      if mode == .claude {
+        let output = try XCTUnwrap(body["output_config"] as? [String: Any])
+        XCTAssertEqual(output["effort"] as? String, "low")
+        XCTAssertEqual(body["system"] as? String, SolverClient.checkInstructions)
+      } else {
+        XCTAssertEqual((body["reasoning"] as? [String: Any])?["effort"] as? String, "low")
+        let format = try XCTUnwrap((body["text"] as? [String: Any])?["format"] as? [String: Any])
+        XCTAssertEqual(format["name"] as? String, "page_check"); XCTAssertEqual(format["strict"] as? Bool, true)
+        let schema = try XCTUnwrap(format["schema"] as? [String: Any])
+        XCTAssertEqual(schema["required"] as? [String], ["blurry", "otherSheet", "questions", "unseen", "verdict", "voice"],
+          "Sorted keys are the generation order: evidence comes before the verdict.")
+        let item = try XCTUnwrap(((schema["properties"] as? [String: Any])?["questions"] as? [String: Any])?["items"] as? [String: Any])
+        XCTAssertEqual(item["required"] as? [String], ["label", "read", "unclear"])
+      }
+    }
+  }
+  func testAPageCheckFallsBackToTheSolveModelWhenTheFastOneIsUnavailable() async throws {
+    let answer = checkAnswer()
+    let missing = AIServiceError.http(provider: .openAI, status: 404, retryAfter: nil, detail: "The model `gpt-6-luna` does not exist")
+    let transport = ScriptedTransport([.failure(missing), .success(answer), .success(answer)])
+    let checker = PageChecker(transport: transport, retryDelay: .milliseconds(1))
+    let configuration = SolverConfiguration(openAIKey: "o")
+    _ = try await checker.check([Data([1])], page: 1, configuration: configuration)
+    _ = try await checker.check([Data([1])], page: 2, configuration: configuration)
+    let models = await transport.requests.map(\.credential.model)
+    XCTAssertEqual(models, ["gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-sol"], "Remembered for the rest of the session.")
+    let denied = ScriptedTransport([.failure(AIServiceError.http(provider: .openAI, status: 401, retryAfter: nil, detail: "bad key"))])
+    do { _ = try await PageChecker(transport: denied).check([Data([1])], page: 1, configuration: configuration); XCTFail("A bad key is not a model problem") }
+    catch { XCTAssertEqual((error as? AIServiceError)?.retryAfter, nil) }
+    let deniedModels = await denied.requests.map(\.credential.model)
+    XCTAssertEqual(deniedModels, ["gpt-6-luna"])
+  }
+  func testAPageCheckVerdictMustAgreeWithItsEvidence() {
+    func item(_ label: String, read: String = "", unclear: String = "") -> PageCheck.Item { .init(label: label, read: read, unclear: unclear) }
+    func check(_ questions: [PageCheck.Item], unseen: String = "", verdict: String = "solvable", voice: String = "",
+               blurry: [Int] = [], other: [Int] = []) -> PageCheck {
+      PageCheck(blurry: blurry, otherSheet: other, questions: questions, unseen: unseen, verdict: verdict, voice: voice)
+    }
+    XCTAssertTrue(check([item("1(a)", read: "300 Pa"), item("1(b)", unclear: "None")]).outcome(photos: 2).clear)
+    XCTAssertFalse(check([item("1(a)", read: "3?0 Pa")]).outcome(photos: 1).clear, "An uncertain digit is never clear.")
+    XCTAssertEqual(check([item("1(a)", read: "3?0 Pa")]).outcome(photos: 1).say, "Look closer at 1(a), and hold still.")
+    XCTAssertFalse(check([item("2", unclear: "exponent blurred")]).outcome(photos: 1).clear, "A listed problem means not clear.")
+    XCTAssertFalse(check([item("2")], unseen: "the bottom of the sheet").outcome(photos: 1).clear)
+    XCTAssertEqual(check([item("2")], unseen: "the bottom of the sheet").outcome(photos: 1).say, "Show the rest of the sheet, slowly.")
+    XCTAssertFalse(check([]).outcome(photos: 1).clear, "A sheet with no questions found is not clear.")
+    let spoken = check([item("4(c)", unclear: "blurred")], verdict: "retake", voice: "Look closer at question 4(c), and hold still.")
+    XCTAssertEqual(spoken.outcome(photos: 1).say, "Look closer at question 4(c), and hold still.")
+    let dropped = check([item("1")], blurry: [0, 2], other: [2, 9]).outcome(photos: 3)
+    XCTAssertTrue(dropped.clear); XCTAssertEqual(dropped.dropped, [2], "Only photos that were sent can be dropped.")
+    XCTAssertFalse(check([item("1")], other: [1, 2]).outcome(photos: 2).clear, "A page left with no photo is not clear.")
+  }
   func testRequestsStreamUseTheRequestedModelsAndSeparateCredentials() throws {
     let photo = AIPhoto(label: "PRIMARY page (source page 2), solve this page:", jpeg: Data([1, 2, 3]))
     for provider in AIProvider.allCases {

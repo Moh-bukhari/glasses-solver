@@ -48,7 +48,7 @@ enum SolverKeychain {
   static func migrateDefaults() {
     let defaults = UserDefaults.standard
     let version = defaults.integer(forKey: "settingsVersion")
-    guard version < 3 else { return }
+    guard version < 4 else { return }
     if version < 2 {
       if defaults.string(forKey: "solverModel") == "gpt-5.4" { defaults.set(SolverConfiguration.openAIDefault, forKey: "solverModel") }
       if defaults.string(forKey: "claudeModel") == "claude-sonnet-5-5" { defaults.set(SolverConfiguration.claudeDefault, forKey: "claudeModel") }
@@ -58,9 +58,13 @@ enum SolverKeychain {
       // 2.0 is controlled by gestures; an old "on" choice must not keep the microphone open.
       defaults.set(false, forKey: "voiceCommands")
     }
-    // 2.1 is controlled by hand gestures only. Glasses buttons (Meta's experimental Inputs) stay an opt-in in Settings.
-    defaults.set(false, forKey: "glassesButtons")
-    defaults.set(3, forKey: "settingsVersion")
+    if version < 3 {
+      // 2.1 is controlled by hand gestures only. Glasses buttons (Meta's experimental Inputs) stay an opt-in in Settings.
+      defaults.set(false, forKey: "glassesButtons")
+    }
+    // 2.4 checks each page while scanning and solves everything after the thumbs-up.
+    defaults.set(false, forKey: "solveWhileScanning")
+    defaults.set(4, forKey: "settingsVersion")
   }
 }
 
@@ -82,7 +86,8 @@ struct SolverSettingsView: View {
   @AppStorage("voiceCommands") private var commands = false
   @AppStorage("handGestures") private var gestures = true
   @AppStorage("glassesButtons") private var glassesButtons = false
-  @AppStorage("solveWhileScanning") private var solveWhileScanning = true
+  @AppStorage("solveWhileScanning") private var solveWhileScanning = false
+  @AppStorage("checkPages") private var checkPages = true
   @AppStorage("captureMode") private var captureMode = AutoScanModel.CaptureMode.frames.rawValue
   @State private var error: String?
   var body: some View {
@@ -95,10 +100,14 @@ struct SolverSettingsView: View {
           Text(mode == .both
             ? "Both APIs solve every page independently, then OpenAI reconciles the two answers against your photo. More careful, but each page takes an extra round and costs more."
             : "Fastest: one request per page. Each answer includes worked steps and its own check.").font(.footnote)
+          Toggle("Check each page before the next", isOn: $checkPages)
+          Text(checkPages
+            ? "While you look at a page, its photos are sent to a fast AI model that checks every question can be read. You hear \"Page 1 is clear\" before you turn the page, or what to show again."
+            : "Pages are saved once nothing new appears for a moment, without an AI check.").font(.footnote)
           Toggle("Solve pages while scanning", isOn: $solveWhileScanning)
           Text(solveWhileScanning
             ? "Each page is uploaded and solved as soon as the next page is saved, so the PDF is ready moments after you finish."
-            : "Nothing is uploaded until you finish; then all pages are solved at once.").font(.footnote)
+            : "Pages are solved after your thumbs-up, all at once.").font(.footnote)
         }
         Section("Capture") {
           Picker("Photos", selection: $captureMode) {
@@ -107,7 +116,7 @@ struct SolverSettingsView: View {
           }
           Text(captureMode == AutoScanModel.CaptureMode.photos.rawValue
             ? "One 12-megapixel photo per page. Sharper for a whole page at arm's length, but each photo pauses the camera and takes several seconds."
-            : "Keeps the clearest moments of the live camera, several per page, with no pause between photos. Look closely at each part of the page; you hear each question number as it is captured.").font(.footnote)
+            : "Keeps the clearest moments of the live camera, several per page, with no pause between photos. Look closely at each part of the page, top to bottom.").font(.footnote)
         }
         if mode != .claude {
           Section("OpenAI") {

@@ -23,18 +23,21 @@ final class FrameCaptureTests: XCTestCase {
     XCTAssertEqual(QuestionLabels.numbers(in: ["2. b", "Some text here", "2. again", "3. c"]), [2, 3], "Distinct, in reading order.")
   }
 
-  func testProgressAnnouncesNewQuestionsAndEachShortGapOnce() {
-    var progress = QuestionProgress()
-    var found = progress.observe([1, 2])
-    XCTAssertEqual(found.new, [1, 2]); XCTAssertEqual(found.missing, [])
-    found = progress.observe([2, 4])
-    XCTAssertEqual(found.new, [4]); XCTAssertEqual(found.missing, [3])
-    found = progress.observe([5])
-    XCTAssertEqual(found.missing, [], "A gap is reported once.")
-    found = progress.observe([3])
-    XCTAssertEqual(found.new, [3]); XCTAssertEqual(progress.missing, [])
-    found = progress.observe([1, 20])
-    XCTAssertEqual(found.missing, [], "A long jump is new numbering (another section), not missed questions.")
+  func testShortGapsAreMissingQuestionsButLongJumpsAreNewNumbering() {
+    XCTAssertEqual(QuestionLabels.gaps(in: [1, 2, 4]), [3])
+    XCTAssertEqual(QuestionLabels.gaps(in: [1, 2, 3]), [])
+    XCTAssertEqual(QuestionLabels.gaps(in: [1, 20]), [], "A long jump is new numbering (another section), not missed questions.")
+  }
+
+  func testCheckedFramesKeepTheirWordsAndRejectedOnesCanBeDropped() {
+    var frames = PageFrames()
+    let top = text(["1. Solve for x in 2x + 3 = 11", "2. Find the slope of the line", "Show all of your work clearly"])
+    let other = text(["7. Compute the integral of cosine", "8. Find the area of the circle", "Express each answer exactly"])
+    _ = frames.offer(sample(), text: top, id: 1, at: 0)
+    _ = frames.offer(sample(content: 0.5), text: other, id: 2, at: 1)
+    XCTAssertTrue(frames.words(of: [1]).contains("slope")); XCTAssertFalse(frames.words(of: [1]).contains("integral"))
+    frames.remove([2])
+    XCTAssertEqual(frames.frameIDs, [1]); XCTAssertFalse(frames.words.contains("integral"), "A photo of another sheet is gone.")
   }
 
   func testOnlySteadyCloseFramesWithoutAHandAreWorthReading() {
@@ -143,12 +146,5 @@ final class FrameCaptureTests: XCTestCase {
     var unlabeled = PageFrames()
     _ = unlabeled.offer(sample(content: 0.05), text: FrameText(), id: 1, at: 0)
     XCTAssertEqual(unlabeled.offer(sample(content: 0.25), text: FrameText(), id: 2, at: 1), .added(2))
-  }
-
-  func testQuestionListsAreSpokenNaturally() {
-    XCTAssertEqual(QuestionLabels.spoken([3]), "Question 3")
-    XCTAssertEqual(QuestionLabels.spoken([4, 3]), "Questions 3 and 4")
-    XCTAssertEqual(QuestionLabels.spoken([1, 2, 3, 4]), "Questions 1 to 4")
-    XCTAssertEqual(QuestionLabels.spoken([1, 3, 5]), "Questions 1, 3 and 5")
   }
 }

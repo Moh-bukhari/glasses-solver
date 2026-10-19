@@ -675,50 +675,143 @@ final class AutoScanTests: XCTestCase {
       camera.onFrame?(image); try await Task.sleep(for: .milliseconds(350))
     }
   }
-  func testLiveFramesKeepEachViewOfAPageWithoutStoppingTheCamera() async throws {
+  func testEachPageIsCheckedBeforeTheScanMovesOnAndSolvedOnlyAfterThumbsUp() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
     let analyzer = FakePageAnalyzer(sample: frameSample()), solver = FakePageSolver(), saver = FakeSolutionSaver()
-    let model = makeModel(camera, analyzer, solver, saver, capture: .frames)
+    let checker = FakePageChecker([.success(.unclear("Look at the bottom of the page, closer."))]), voice = FakeScanVoice()
+    let model = makeModel(camera, analyzer, solver, saver, capture: .frames, voice: voice, checker: checker, solveWhileScanning: false)
     await analyzer.setText(text(viewA))
     model.start(); await waitUntil { model.phase == .seeking }
-    try await sendFrames(camera, model: model, seconds: 1.5)
-    XCTAssertEqual(model.phase, .seeking, "One view does not end the page while new views may follow.")
-    XCTAssertTrue(model.guide.contains("Questions 1 and 2: 1 photo"), model.guide)
-    await analyzer.setContent(0.3); await analyzer.setText(text(rest)) // the wearer looks lower, at the rest of question 2
-    try await sendFrames(camera, model: model, seconds: 6)
-    await waitUntil { model.phase == .awaitingNext }
-    XCTAssertEqual(model.phase, .awaitingNext, model.guide)
-    XCTAssertEqual(model.pages.count, 1); XCTAssertEqual(model.pages[0].frames.count, 2, "Both views are photos of questions 1 and 2.")
-    XCTAssertEqual(model.pages[0].questions, [1, 2])
-    XCTAssertTrue(model.guide.contains("Questions 1 and 2 saved: 2 photos."), model.guide)
+    try await show(camera) { voice.messages.contains("Page 1: Look at the bottom of the page, closer.") }
+    XCTAssertTrue(voice.messages.contains("Checking page 1."), "\(voice.messages)")
+    XCTAssertTrue(voice.messages.contains("Page 1: Look at the bottom of the page, closer."), "\(voice.messages)")
+    XCTAssertEqual(model.phase, .seeking, "An unclear page is not saved; the wearer keeps looking at it.")
+    XCTAssertTrue(model.pages.isEmpty)
+    await analyzer.setContent(0.3); await analyzer.setText(text(rest)) // the bottom of page 1
+    try await show(camera) { model.phase == .awaitingNext }
+    XCTAssertEqual(model.pages.count, 1); XCTAssertEqual(model.pages[0].frames.count, 2, "Both views are photos of page 1.")
+    XCTAssertTrue(voice.messages.contains { $0.hasPrefix("Page 1 is clear. Turn the page.") }, "\(voice.messages)")
+    var checks = await checker.photoCounts
+    XCTAssertEqual(checks, [1, 2], "The second check sees every photo of the page.")
+    var calls = await solver.calls
+    XCTAssertEqual(calls, 0, "Nothing is solved before the thumbs-up.")
     XCTAssertEqual(camera.captures, 0, "No full-resolution still, so the preview never pauses.")
-    XCTAssertEqual(camera.stops, 1, "Only the start-of-scan reset stops the camera.")
-    let reads = await analyzer.reads
-    XCTAssertLessThan(reads, 25, "Text is read a few times a second at most, only on steady frames.")
+    await analyzer.setContent(0.9); await analyzer.setText(text(viewB)) // the wearer turns to page 2
+    try await show(camera, limit: 30) { model.pages.count == 2 && model.phase == .awaitingNext }
+    XCTAssertTrue(voice.messages.contains { $0.hasPrefix("Page 2 is clear.") }, "\(voice.messages)")
+    checks = await checker.photoCounts
+    XCTAssertEqual(checks, [1, 2, 1])
+    model.handle(.finish); await waitUntil { model.phase == .finished }
+    XCTAssertEqual(model.phase, .finished, model.guide)
+    XCTAssertEqual(saver.frameCounts, [2, 1])
+    calls = await solver.calls; XCTAssertEqual(calls, 2)
+    model.stop()
+  }
+  func testAPhotoOfAnotherSheetIsLeftOutOfThePage() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: frameSample())
+    let checker = FakePageChecker([.success(.unclear("Show the rest of the page.")),
+      .success(PageVerdict(clear: true, say: "", dropped: [2]))])
+    let model = makeModel(camera, analyzer, FakePageSolver(), FakeSolutionSaver(), capture: .frames, checker: checker)
+    await analyzer.setText(text(viewA))
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await show(camera) { model.guide.hasPrefix("Page 1: Show the rest") }
+    await analyzer.setContent(0.5); await analyzer.setText(text(viewC)) // a glance at another sheet
+    try await show(camera) { model.phase == .awaitingNext }
+    let checks = await checker.photoCounts
+    XCTAssertEqual(checks, [1, 2])
+    XCTAssertEqual(model.pages.count, 1); XCTAssertEqual(model.pages[0].frames.count, 1, "Only page 1's photo is saved.")
+    model.stop()
+  }
+  func testThumbsUpOnAnUnclearPageWarnsOnceThenSolvesAnyway() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: frameSample()), saver = FakeSolutionSaver(), voice = FakeScanVoice()
+    let checker = FakePageChecker([.success(.unclear("Hold still over the table."))])
+    let model = makeModel(camera, analyzer, FakePageSolver(), saver, capture: .frames, voice: voice, checker: checker)
+    await analyzer.setText(text(viewA))
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await show(camera) { voice.messages.contains("Page 1: Hold still over the table.") }
+    model.handle(.finish)
+    XCTAssertTrue(voice.messages.contains("Page 1 still isn't clear: Hold still over the table. Or thumbs-up to solve anyway."),
+      "\(voice.messages)")
+    XCTAssertEqual(model.phase, .seeking)
+    model.handle(.finish) // the wearer solves anyway
+    await waitUntil { model.phase == .finished }
+    XCTAssertEqual(model.phase, .finished, model.guide); XCTAssertEqual(saver.frameCounts, [1])
+    model.stop()
+  }
+  func testThumbsUpChecksTheOpenPageFirst() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: frameSample()), saver = FakeSolutionSaver(), voice = FakeScanVoice()
+    let checker = FakePageChecker([.success(.unclear("The bottom line is cut off; show it."))])
+    let model = makeModel(camera, analyzer, FakePageSolver(), saver, capture: .frames, voice: voice, checker: checker)
+    await analyzer.setText(text(viewA))
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await sendFrames(camera, model: model, seconds: 1.4) // a view is kept, but the page was not checked yet
+    model.handle(.finish)
+    try await show(camera) { voice.messages.contains { $0.hasPrefix("Page 1: The bottom line is cut off") } }
+    XCTAssertTrue(voice.messages.contains("Page 1: The bottom line is cut off; show it. Or thumbs-up to solve anyway."),
+      "\(voice.messages)")
+    XCTAssertTrue(model.pages.isEmpty, "An unclear page is not solved without asking.")
+    await analyzer.setContent(0.3); await analyzer.setText(text(rest)) // the wearer shows the bottom line
+    try await show(camera) { model.phase == .awaitingNext }
+    XCTAssertTrue(voice.messages.contains { $0.hasPrefix("Page 1 is clear.") }, "\(voice.messages)")
     model.handle(.finish); await waitUntil { model.phase == .finished }
     XCTAssertEqual(saver.frameCounts, [2]); model.stop()
   }
-  func testQuestionNumbersAreSpokenAndASkippedOneIsAskedFor() async throws {
+  func testAfterThreeUnclearChecksThePageWaitsForTheWearer() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
     let analyzer = FakePageAnalyzer(sample: frameSample()), voice = FakeScanVoice()
-    let model = makeModel(camera, analyzer, FakePageSolver(), FakeSolutionSaver(), capture: .frames, voice: voice)
+    let checker = FakePageChecker(Array(repeating: .success(.unclear("Look closer at question 2.")), count: 4))
+    let model = makeModel(camera, analyzer, FakePageSolver(), FakeSolutionSaver(), capture: .frames, voice: voice, checker: checker)
     await analyzer.setText(text(viewA))
     model.start(); await waitUntil { model.phase == .seeking }
-    try await sendFrames(camera, model: model, seconds: 1.5)
-    XCTAssertTrue(voice.messages.contains("Questions 1 and 2."), "\(voice.messages)")
-    await analyzer.setContent(0.3); await analyzer.setText(text(viewC)) // questions 4 and 5: question 3 was skipped
-    for _ in 0..<15 where !voice.messages.contains(where: { $0.contains("isn't captured") }) {
-      camera.onFrame?(paperImage().cgImage!); try await Task.sleep(for: .milliseconds(350))
+    for (round, view) in [(1, viewA), (2, rest), (3, viewB)] {
+      if round > 1 { await analyzer.setContent(0.3 * Double(round)); await analyzer.setText(text(view)) }
+      try await show(camera) { voice.messages.filter { $0.contains("question 2") }.count == round }
     }
-    XCTAssertTrue(voice.messages.contains("Questions 1 and 2 saved."), "A new question saves the one before. \(voice.messages)")
-    XCTAssertTrue(voice.messages.contains("Questions 4 and 5."), "\(voice.messages)")
-    XCTAssertTrue(voice.messages.contains("Question 3 isn't captured yet. Look at it again."), "\(voice.messages)")
-    await analyzer.setContent(0.6); await analyzer.setText(text(viewB)) // the wearer looks back at question 3
-    for _ in 0..<12 where !voice.messages.contains("Question 3.") {
-      camera.onFrame?(paperImage().cgImage!); try await Task.sleep(for: .milliseconds(350))
-    }
-    XCTAssertTrue(voice.messages.contains("Question 3."), "\(voice.messages)")
-    XCTAssertEqual(voice.messages.filter { $0.contains("isn't captured") }.count, 1, "Each gap is mentioned once.")
+    XCTAssertTrue(voice.messages.contains("Page 1: Still unclear. Look closer at question 2. Or thumbs-right to keep it as it is."),
+      "\(voice.messages)")
+    XCTAssertTrue(voice.messages.contains("Page 1 still isn't clear: Look closer at question 2. Thumbs-right keeps it."),
+      "\(voice.messages)")
+    await analyzer.setContent(0.95); await analyzer.setText(text(viewC)) // more views, but no fourth automatic check
+    try await show(camera, limit: 10) { false }
+    let checks = await checker.photoCounts
+    XCTAssertEqual(checks.count, 3); XCTAssertEqual(model.phase, .seeking)
+    model.handle(.next) // 👉 keeps the page as it is
+    await waitUntil { model.phase == .awaitingNext && model.pages.count == 1 }
+    XCTAssertEqual(model.pages.count, 1); model.stop()
+  }
+  func testAPageCheckThatCannotRunNeverBlocksTheScan() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: frameSample()), voice = FakeScanVoice()
+    let denied = AIServiceError.http(provider: .openAI, status: 401, retryAfter: nil, detail: "invalid key")
+    let checker = FakePageChecker([.failure(denied)])
+    let model = makeModel(camera, analyzer, FakePageSolver(), FakeSolutionSaver(), capture: .frames, voice: voice, checker: checker)
+    await analyzer.setText(text(viewA))
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await show(camera) { model.phase == .awaitingNext }
+    XCTAssertEqual(model.pages.count, 1, "The page is saved without a check.")
+    XCTAssertTrue(voice.messages.contains { $0.hasPrefix("Page checks are off.") }, "\(voice.messages)")
+    await analyzer.setContent(0.9); await analyzer.setText(text(viewB))
+    try await show(camera, limit: 40) { model.pages.count == 2 && model.phase == .awaitingNext }
+    let checks = await checker.photoCounts
+    XCTAssertEqual(checks, [1], "Later pages are saved when nothing new appears, without trying again.")
+    XCTAssertEqual(model.pages.count, 2)
+    model.stop()
+  }
+  func testASlowOrDroppedCheckIsRetriedThenTheScanContinues() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: frameSample()), voice = FakeScanVoice()
+    let checker = FakePageChecker([.failure(URLError(.timedOut)), .failure(URLError(.networkConnectionLost))])
+    let model = makeModel(camera, analyzer, FakePageSolver(), FakeSolutionSaver(), capture: .frames, voice: voice, checker: checker)
+    await analyzer.setText(text(viewA))
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await show(camera, limit: 30) { model.phase == .awaitingNext }
+    let checks = await checker.photoCounts
+    XCTAssertEqual(checks, [1, 1], "One retry while the wearer holds still.")
+    XCTAssertEqual(model.pages.count, 1)
+    XCTAssertTrue(voice.messages.contains("Couldn't check page 1, so it's saved without a check."), "\(voice.messages)")
     model.stop()
   }
   func testThumbsRightSavesTheFramesNowAndThumbsUpSavesThenSolves() async throws {
@@ -755,7 +848,7 @@ final class AutoScanTests: XCTestCase {
       camera.onFrame?(paperImage().cgImage!); try await Task.sleep(for: .milliseconds(350))
     }
     try await sendFrames(camera, model: model, seconds: 2)
-    XCTAssertTrue(voice.messages.contains { $0.hasPrefix("Still questions 1 and 2.") }, "\(voice.messages)")
+    XCTAssertTrue(voice.messages.contains { $0.hasPrefix("Still page 1.") }, "\(voice.messages)")
     XCTAssertEqual(model.pages.count, 1)
     await analyzer.setContent(0.9); await analyzer.setText(text(viewB)) // now the next sheet
     try await sendFrames(camera, model: model, seconds: 1.5)
@@ -766,69 +859,6 @@ final class AutoScanTests: XCTestCase {
   /// Sends preview frames, whatever the phase, until `done` (at most `limit` frames, one every 350 ms).
   private func show(_ camera: FakeScanCamera, limit: Int = 20, until done: () -> Bool) async throws {
     for _ in 0..<limit where !done() { camera.onFrame?(paperImage().cgImage!); try await Task.sleep(for: .milliseconds(350)) }
-  }
-  func testEachQuestionIsAPageNamedByItsNumberAndComingBackAddsToIt() async throws {
-    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
-    let analyzer = FakePageAnalyzer(sample: frameSample()), solver = FakePageSolver(), saver = FakeSolutionSaver(), voice = FakeScanVoice()
-    let model = makeModel(camera, analyzer, solver, saver, capture: .frames, voice: voice)
-    await analyzer.setText(text(question1))
-    model.start(); await waitUntil { model.phase == .seeking }
-    try await sendFrames(camera, model: model, seconds: 1.5)
-    XCTAssertTrue(model.guide.hasPrefix("Question 1: 1 photo"), "Numbered lists inside a question are not questions. \(model.guide)")
-    await analyzer.setContent(0.3); await analyzer.setText(text(question2)) // the next question, on the same sheet
-    try await show(camera) { model.pages.count == 1 && voice.messages.contains("Question 2.") }
-    XCTAssertTrue(voice.messages.contains("Question 1 saved."), "\(voice.messages)")
-    XCTAssertEqual(model.phase, .seeking, "Question 2 is scanned without a page turn or gesture.")
-    await analyzer.setContent(0.6); await analyzer.setText(text(question1Lower)) // back to question 1 for a clearer look
-    try await show(camera, limit: 30) { model.phase == .awaitingNext && model.pages.count == 2 && model.pages[0].frames.count == 2 }
-    XCTAssertEqual(model.pages.map(\.questions), [[1], [2]], "Question 1 is not added a second time.")
-    XCTAssertEqual(model.pages[0].frames.count, 2, "The new photo joins question 1's photos.")
-    XCTAssertEqual(model.pages.indices.map { model.pages[$0].name(at: $0) }, ["Question 1", "Question 2"])
-    XCTAssertTrue(model.guide.hasPrefix("Question 1 updated: 2 photos."), model.guide)
-    model.handle(.finish); await waitUntil { model.phase == .finished }
-    XCTAssertEqual(saver.frameCounts, [2, 1]); XCTAssertEqual(saver.names, ["Question 1", "Question 2"])
-    let names = await solver.jobs.map(\.title)
-    XCTAssertTrue(names.contains("Question 1") && names.contains("Question 2"), "The AI names pages by question: \(names)")
-    model.stop()
-  }
-  func testAViewWithoutAQuestionNumberContinuesTheQuestionSavedLast() async throws {
-    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
-    let analyzer = FakePageAnalyzer(sample: frameSample()), voice = FakeScanVoice()
-    let model = makeModel(camera, analyzer, FakePageSolver(), FakeSolutionSaver(), capture: .frames, voice: voice)
-    await analyzer.setText(text(question1))
-    model.start(); await waitUntil { model.phase == .seeking }
-    try await sendFrames(camera, model: model, seconds: 1.5)
-    model.handle(.next); await waitUntil { model.phase == .awaitingNext && model.pages.count == 1 }
-    model.handle(.next) // the wearer paused, then looks at the rest of question 1
-    await analyzer.setContent(0.3); await analyzer.setText(text(rest))
-    try await sendFrames(camera, model: model, seconds: 1.5)
-    XCTAssertTrue(model.guide.hasPrefix("Question 1: 1 photo"), model.guide)
-    try await show(camera, limit: 15) { model.phase == .awaitingNext }
-    XCTAssertEqual(model.pages.count, 1, "No unnamed page.")
-    XCTAssertEqual(model.pages[0].frames.count, 2); XCTAssertEqual(model.pages[0].questions, [1])
-    XCTAssertTrue(model.guide.hasPrefix("Question 1 updated: 2 photos."), model.guide)
-    model.stop()
-  }
-  func testARetakeIgnoresAnotherQuestionAndSaysWhichOneToShow() async throws {
-    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
-    let analyzer = FakePageAnalyzer(sample: frameSample()), voice = FakeScanVoice()
-    let model = makeModel(camera, analyzer, FakePageSolver(), FakeSolutionSaver(), capture: .frames, voice: voice)
-    await analyzer.setText(text(question1))
-    model.start(); await waitUntil { model.phase == .seeking }
-    try await sendFrames(camera, model: model, seconds: 1.5)
-    model.handle(.next); await waitUntil { model.phase == .awaitingNext && model.pages.count == 1 }
-    let original = model.pages[0].id
-    model.handle(.previous)
-    XCTAssertEqual(model.phase, .seeking); XCTAssertTrue(model.guide.hasPrefix("Retaking question 1."), model.guide)
-    await analyzer.setContent(0.3); await analyzer.setText(text(question2))
-    try await show(camera, limit: 8) { false }
-    XCTAssertTrue(voice.messages.contains("That's question 2. Show question 1."), "\(voice.messages)")
-    XCTAssertEqual(model.pages.map(\.id), [original], "Question 2 is not saved as question 1.")
-    await analyzer.setContent(0.6); await analyzer.setText(text(question1Lower))
-    try await show(camera, limit: 30) { model.pages.first?.id != original && model.phase == .awaitingNext }
-    XCTAssertEqual(model.pages.count, 1); XCTAssertNotEqual(model.pages[0].id, original)
-    XCTAssertEqual(model.pages[0].questions, [1])
-    model.stop()
   }
   func testThumbsUpBeforeAnyFrameIsKeptDoesNotFinish() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
@@ -931,7 +961,7 @@ final class AutoScanTests: XCTestCase {
     for _ in 0..<10 { camera.onFrame?(paperImage().cgImage!); try await Task.sleep(for: .milliseconds(350)) }
     XCTAssertEqual(model.phase, .awaitingNext); XCTAssertEqual(camera.captures, 1)
     model.handle(.next); XCTAssertEqual(model.phase, .seeking)
-    XCTAssertTrue(model.guide.contains("Next page"), model.guide)
+    XCTAssertTrue(model.guide.hasPrefix("Page 4"), model.guide)
     model.stop()
   }
   func testQuestionSkippedByBothNeighborsIsClaimedBeforeThePDF() async throws {
@@ -1027,12 +1057,15 @@ final class AutoScanTests: XCTestCase {
     ScanDraftStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent("draft-\(UUID())"))
   }
   /// Still-photo capture unless `capture` says otherwise; most flows predate live frames and still apply to stills.
+  /// Older flows solve while scanning, as 2.3 and earlier did by default; 2.4 solves after the thumbs-up.
   private func makeModel(_ camera: FakeScanCamera, _ analyzer: FakePageAnalyzer, _ solver: FakePageSolver, _ saver: FakeSolutionSaver,
-                         capture: AutoScanModel.CaptureMode = .photos, voice: FakeScanVoice? = nil) -> AutoScanModel {
-    let model = AutoScanModel(camera: camera, analyzer: analyzer, solver: solver, saver: saver,
+                         capture: AutoScanModel.CaptureMode = .photos, voice: FakeScanVoice? = nil,
+                         checker: FakePageChecker = FakePageChecker(), solveWhileScanning: Bool = true) -> AutoScanModel {
+    let model = AutoScanModel(camera: camera, analyzer: analyzer, solver: solver, checker: checker, saver: saver,
       draft: temporaryDraft(), voice: voice ?? FakeScanVoice(),
       configurationProvider: { SolverConfiguration(openAIKey: "test-key-never-sent", openAIModel: "gpt-4.1") })
-    model.voiceGuidance = voice != nil; model.captureMode = capture; return model
+    model.voiceGuidance = voice != nil; model.captureMode = capture; model.solveWhileScanning = solveWhileScanning
+    return model
   }
   /// A steady, close-up preview frame: text 30 px tall in a 1280-px frame.
   private func frameSample() -> PageSample {
@@ -1045,13 +1078,9 @@ final class AutoScanTests: XCTestCase {
   }
   private let viewA = ["1. Solve for x in 2x + 3 = 11", "2. Find the slope of the line", "Show all of your work clearly"]
   private let viewB = ["3. Factor x squared minus nine", "4. Graph y equals two x plus one", "Use the grid provided below"]
-  /// The lower part of question 2: no question number in view.
+  /// The lower part of the sheet: no question number in view.
   private let rest = ["through the points (1, 2) and (3, 8)", "then write its equation in slope form", "Label both of the axes"]
   private let viewC = ["4. Compute the integral of cosine", "5. Find the area of the circle", "Express each answer exactly"]
-  /// A packet that names its questions: the numbered lines are parts of the question.
-  private let question1 = ["Question 1: A tank holds water at rest", "1. Find the gauge pressure at the bottom", "2. Find the force on the side wall"]
-  private let question1Lower = ["Question 1 (continued): the gauge reads 360 Pa", "3. Find the depth of the water column", "Take g equal to 9.81 m/s squared"]
-  private let question2 = ["Question 2: A piston moves in a cylinder", "(a) Find the work done by the gas", "(b) Find the heat added to the gas"]
   private func sendStableFrames(_ camera: FakeScanCamera, model: AutoScanModel, count: Int = 8) async throws {
     let image = paperImage().cgImage!
     for _ in 0..<count {
@@ -1185,6 +1214,21 @@ private actor FakePageSolver: PageSolving {
   }
   func forget(keeping urls: Set<URL>) {}
 }
+/// Answers checks in order from `verdicts`, then says every page is clear.
+private actor FakePageChecker: PageChecking {
+  private var verdicts: [Result<PageVerdict, any Error>]
+  private(set) var photoCounts: [Int] = []
+  init(_ verdicts: [Result<PageVerdict, any Error>] = []) { self.verdicts = verdicts }
+  func check(_ photos: [Data], page: Int, configuration: SolverConfiguration) async throws -> PageVerdict {
+    photoCounts.append(photos.count)
+    return verdicts.isEmpty ? .clear : try verdicts.removeFirst().get()
+  }
+}
+private extension PageVerdict {
+  static let clear = PageVerdict(clear: true, say: "", dropped: [])
+  static func unclear(_ say: String) -> PageVerdict { PageVerdict(clear: false, say: say, dropped: []) }
+}
+
 @MainActor
 private final class FakeSolutionSaver: SolutionSaving {
   var saves = 0

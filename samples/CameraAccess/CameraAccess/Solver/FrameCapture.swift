@@ -1,7 +1,8 @@
 import Foundation
 
 // Live multi-frame page capture: instead of one slow full-resolution still per page, the clearest preview frames of
-// each part of a page are kept as the page's photos, and question numbers read on the phone track what is covered.
+// each part of a page are kept as the page's photos. Question numbers read on the phone only help pick which frames to
+// keep; whether a page is complete is decided by the AI page check (see AutoScanModel).
 // Pure Foundation (Sendable value types); the Vision text reader lives in ScanQuality.swift.
 
 /// Top-level question numbers read from the start of recognized text lines.
@@ -29,14 +30,6 @@ enum QuestionLabels {
     for line in lines { if let label = label(in: line), label.heading, seen.insert(label.number).inserted { ordered.append(label.number) } }
     return ordered
   }
-  /// "Question 3", "Questions 3 and 4", "Questions 1 to 5".
-  static func spoken(_ numbers: [Int]) -> String {
-    let sorted = Array(Set(numbers)).sorted()
-    guard let first = sorted.first, let last = sorted.last else { return "" }
-    if sorted.count == 1 { return "Question \(first)" }
-    if sorted.count == last - first + 1 && sorted.count > 2 { return "Questions \(first) to \(last)" }
-    return "Questions " + sorted.dropLast().map(String.init).joined(separator: ", ") + " and \(last)"
-  }
   /// Distinct numbers in reading order.
   static func numbers(in lines: [String]) -> [Int] {
     var seen: Set<Int> = [], ordered: [Int] = []
@@ -45,25 +38,9 @@ enum QuestionLabels {
   }
 }
 
-/// Question numbers captured so far in the packet, to announce new ones and notice a skipped number.
-/// Numbering may restart (a new section or worksheet); only a short forward jump counts as a gap.
-struct QuestionProgress: Sendable, Equatable {
-  private(set) var captured: [Int] = []
-  /// Gaps already reported, so each is spoken once.
-  private(set) var reported: Set<Int> = []
+extension QuestionLabels {
+  /// Numbers between seen neighbors at most `maxGap` apart: likely skipped questions, not a new section.
   static let maxGap = 3
-
-  mutating func reset() { self = Self() }
-
-  /// Records numbers seen in a kept frame; returns the newly captured ones and newly noticed missing ones.
-  mutating func observe(_ numbers: [Int]) -> (new: [Int], missing: [Int]) {
-    var new: [Int] = []
-    for number in numbers where !captured.contains(number) { captured.append(number); new.append(number) }
-    return (new, takeMissing())
-  }
-
-  /// A number between captured neighbors (at most `maxGap` apart) that has not been captured itself.
-  var missing: [Int] { Self.gaps(in: Set(captured)) }
   static func gaps(in numbers: Set<Int>) -> [Int] {
     let sorted = numbers.sorted()
     var gaps: [Int] = []
@@ -71,12 +48,6 @@ struct QuestionProgress: Sendable, Equatable {
       gaps += Array((low + 1)..<high)
     }
     return gaps
-  }
-
-  private mutating func takeMissing() -> [Int] {
-    let fresh = missing.filter { !reported.contains($0) }
-    reported.formUnion(fresh)
-    return fresh
   }
 }
 
@@ -172,8 +143,8 @@ struct PageFrames: Sendable {
     guard let height = text.smallLineHeight else { return true }
     return height >= configuration.minReadLineHeight
   }
-  /// Numbers missing between the numbers seen on this page (at most `QuestionProgress.maxGap` apart).
-  var missing: [Int] { QuestionProgress.gaps(in: questions(headingsOnly: headingsOnly)) }
+  /// Numbers missing between the numbers seen on this page (at most `QuestionLabels.maxGap` apart).
+  var missing: [Int] { QuestionLabels.gaps(in: questions(headingsOnly: headingsOnly)) }
 
   /// Every analyzed frame: is it steady, readable and big enough to be worth reading and keeping?
   /// A view with no text found (a figure, faint handwriting) needs twice as long to be kept.
@@ -229,7 +200,13 @@ struct PageFrames: Sendable {
   /// Frames in the order they were first taken.
   var frameIDs: [Int] { kept.sorted { $0.time < $1.time }.map(\.id) }
   /// Every word read on this page, to recognize the same sheet after it was saved.
-  var words: Set<String> { kept.reduce(into: Set<String>()) { $0.formUnion($1.signature) } }
+  var words: Set<String> { words(of: Set(kept.map(\.id))) }
+  /// The words read in the given frames: the ones saved when only some of the kept frames make up the page.
+  func words(of ids: Set<Int>) -> Set<String> {
+    kept.filter { ids.contains($0.id) }.reduce(into: Set<String>()) { $0.formUnion($1.signature) }
+  }
+  /// Drops frames the page check found to show another sheet or nothing readable.
+  mutating func remove(_ ids: Set<Int>) { kept.removeAll { ids.contains($0.id) } }
   /// Share of `words` already in `known`: how much of a view was seen before.
   static func overlap(_ words: Set<String>, with known: Set<String>) -> Double {
     words.isEmpty ? 0 : Double(words.intersection(known).count) / Double(words.count)

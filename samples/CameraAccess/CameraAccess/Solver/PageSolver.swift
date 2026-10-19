@@ -179,6 +179,110 @@ protocol PageSolving: Sendable {
   func forget(keeping urls: Set<URL>) async
 }
 
+/// The fast model's answer about one sheet's photos (see `SolverClient.checkInstructions`), evidence before verdict.
+struct PageCheck: Codable, Sendable, Equatable {
+  struct Item: Codable, Sendable, Equatable { let label: String; let read: String; let unclear: String }
+  /// 1-based photos too blurred, dark, distant or covered to add anything, and photos of a different sheet.
+  let blurry: [Int]
+  let otherSheet: [Int]
+  /// Every question, subpart, figure and table on the sheet, with its given values ("?" for any uncertain character).
+  let questions: [Item]
+  /// Parts of the sheet no photo shows; empty when none.
+  let unseen: String
+  /// "solvable" or "retake".
+  let verdict: String
+  /// One short spoken instruction when the sheet must be shown again.
+  let voice: String
+
+  /// The app's own rule on top of the model's verdict: any doubt in its evidence means the page is not clear.
+  func outcome(photos count: Int) -> PageVerdict {
+    func blank(_ text: String) -> Bool {
+      let value = text.trimmed.lowercased()
+      return value.isEmpty || ["none", "none.", "n/a", "-", "—", "nothing", "no"].contains(value)
+    }
+    let dropped = Array(Set((blurry + otherSheet).filter { (1...max(1, count)).contains($0) })).sorted()
+    let clear = verdict.trimmed.lowercased() == "solvable" && !questions.isEmpty
+      && questions.allSatisfy { blank($0.unclear) && !$0.read.contains("?") } && blank(unseen) && dropped.count < count
+    guard !clear else { return PageVerdict(clear: true, say: "", dropped: dropped) }
+    let words = voice.split(whereSeparator: \.isWhitespace).count
+    let say: String
+    if !blank(voice) && words <= 16 { say = voice.trimmed }
+    else if let item = questions.first(where: { !blank($0.unclear) || $0.read.contains("?") }) {
+      say = "Look closer at \(item.label), and hold still."
+    } else if !blank(unseen) { say = "Show the rest of the sheet, slowly." }
+    else { say = "Look at the whole sheet again, closer and steadier." }
+    return PageVerdict(clear: false, say: say, dropped: dropped)
+  }
+}
+
+/// What the scan does with a page check: save the page, or say what to show again. `dropped` photos (1-based) show
+/// another sheet or nothing readable.
+struct PageVerdict: Sendable, Equatable {
+  let clear: Bool
+  let say: String
+  let dropped: [Int]
+}
+
+protocol PageChecking: Sendable {
+  /// `photos` are one sheet's JPEG frames in capture order; `page` is its number in the packet.
+  func check(_ photos: [Data], page: Int, configuration: SolverConfiguration) async throws -> PageVerdict
+}
+
+/// Asks the lead provider's fast model whether a sheet's photos are clear enough to solve, with one quick retry for an
+/// overload or a dropped connection. It skips the solve limiter: the wearer is waiting for it.
+/// If the account cannot use the fast model, the configured solve model checks pages for the rest of the session.
+actor PageChecker: PageChecking {
+  private let transport: any AITransport
+  private let retryDelay: Duration
+  private var useSolveModel: Set<AIProvider> = []
+  init(transport: any AITransport = SolverClient(), retryDelay: Duration = .seconds(1)) {
+    self.transport = transport; self.retryDelay = retryDelay
+  }
+  func check(_ photos: [Data], page: Int, configuration: SolverConfiguration) async throws -> PageVerdict {
+    try configuration.validate()
+    let labeled = photos.enumerated().map { AIPhoto(label: "Photo \($0.offset + 1) of \(photos.count):", jpeg: $0.element) }
+    let prompt = photos.count == 1 ? "Photo 1 shows one sheet, page \(page) of the packet. Check this sheet."
+      : "Photos 1 to \(photos.count) show one sheet, page \(page) of the packet, oldest first. The wearer is looking at photo \(photos.count) now. Check this sheet."
+    var retried = false
+    while true {
+      try Task.checkCancellation()
+      let lead = configuration.lead
+      let credential = useSolveModel.contains(lead.provider) ? lead : configuration.checkCredential
+      let request = AIRequest(credential: credential, photos: labeled, prompt: prompt, tokenLimit: 8_000, kind: .check)
+      do {
+        let data = try await transport.send(request)
+        guard let check = try? JSONDecoder().decode(PageCheck.self, from: data) else {
+          throw AIResultError.repairable("The page check returned an unexpected answer.")
+        }
+        return check.outcome(photos: photos.count)
+      } catch {
+        if credential.model != lead.model, Self.modelUnavailable(error) {
+          useSolveModel.insert(lead.provider); continue
+        }
+        guard !retried, !Task.isCancelled, PageSolver.isTransient(error) else { throw error }
+        retried = true
+        try await Task.sleep(for: retryDelay)
+      }
+    }
+  }
+  /// The account or API version cannot use the fast check model (not a key, billing or rate problem).
+  static func modelUnavailable(_ error: any Error) -> Bool {
+    guard case .http(_, let status, _, let detail)? = error as? AIServiceError else { return false }
+    return [400, 403, 404].contains(status) && detail.lowercased().contains("model")
+  }
+}
+
+/// Runs `work`, giving up with a timeout after `seconds`.
+func withDeadline<T: Sendable>(_ seconds: Double, _ work: @escaping @Sendable () async throws -> T) async throws -> T {
+  try await withThrowingTaskGroup(of: T.self) { group in
+    group.addTask { try await work() }
+    group.addTask { try await Task.sleep(for: .seconds(seconds)); throw URLError(.timedOut) }
+    defer { group.cancelAll() }
+    guard let value = try await group.next() else { throw URLError(.timedOut) }
+    return value
+  }
+}
+
 /// Bounds simultaneous provider requests; waiting callers resume in arrival order.
 actor AsyncLimiter {
   private let limit: Int

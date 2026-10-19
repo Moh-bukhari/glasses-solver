@@ -21,7 +21,8 @@ struct AutoScanView: View {
   @AppStorage("privateAudio") private var privateAudio = true
   @AppStorage("handGestures") private var handGestures = true
   @AppStorage("glassesButtons") private var glassesButtons = false
-  @AppStorage("solveWhileScanning") private var solveWhileScanning = true
+  @AppStorage("solveWhileScanning") private var solveWhileScanning = false
+  @AppStorage("checkPages") private var checkPages = true
   @AppStorage("captureMode") private var captureMode = AutoScanModel.CaptureMode.frames.rawValue
   @AppStorage("solverModeNotice") private var modeNotice = false
 
@@ -30,7 +31,7 @@ struct AutoScanView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 18) {
           Text("One button. Every page. One PDF.").font(.title2.bold())
-          Text("Tap Start, or run the Start Glasses Scan shortcut, and look closely at each part of a page: the clearest moments are kept and each question number is announced. 👍 solves, 👉 next page, 👈 previous page. Pages are solved while you scan.")
+          Text("Tap Start, or run the Start Glasses Scan shortcut, and look closely at each part of a page, top to bottom. Each page is checked before you move on: you hear \"Page 1 is clear\", or what to show again. 👍 solves every page, 👉 keeps a page as it is, 👈 previous page.")
             .foregroundStyle(.secondary)
           if modeNotice && !importOnly {
             HStack(alignment: .top) {
@@ -157,7 +158,7 @@ struct AutoScanView: View {
       Text("👍 Thumb up: start solving (finish).")
       Text("👉 Thumb to your right: next page now, or take the page in view now.")
       Text("👈 Thumb to your left (or 👎): previous page. Retakes the page you just scanned; again to go one more page back. Turn back to that page and it is captured when steady.")
-      Text("Live frames (default): look at each part of the page from close up, about a hand's width of text at a time, and hold still for half a second. You hear each question number as it is captured, and a skipped number is asked for. A page is saved once nothing new appears for a few seconds, or with 👉.")
+      Text("Live frames (default): look at each part of the page from close up, about a hand's width of text at a time, top to bottom, and hold still for half a second. When you pause, the page is checked by a fast AI model: you hear \"Page 1 is clear. Turn the page.\" or what to show again. 👉 keeps a page as it is.")
       Text("If the AI can't read a page, the glasses ask for it again after you finish. Show it, or give 👍 to solve without it.")
       Text("Start without touching the app: add the Start Glasses Scan shortcut to the Action button (Settings › Action Button › Shortcut) or Back Tap (Settings › Accessibility › Touch › Back Tap), or say \u{201C}Start a scan in Glasses Solver\u{201D} to Siri. The phone must be unlocked.")
       Text("Directions are spoken quietly through the glasses only. Keep the phone unlocked with this app open while scanning; solving continues if you switch tabs.")
@@ -173,7 +174,7 @@ struct AutoScanView: View {
     model.voiceGuidance = voiceGuidance; model.voiceCommands = voiceCommands
     model.cueVolume = Float(cueVolume); model.privateAudio = privateAudio
     model.gesturesEnabled = handGestures; model.glassesButtons = glassesButtons
-    model.solveWhileScanning = solveWhileScanning
+    model.solveWhileScanning = solveWhileScanning; model.checkPages = checkPages
     model.captureMode = AutoScanModel.CaptureMode(rawValue: captureMode) ?? .frames
   }
   private var phaseIcon: String {
@@ -261,7 +262,7 @@ private struct PageQueueView: View {
                 }.frame(width: 110, height: 125).background(.black).clipShape(RoundedRectangle(cornerRadius: 10))
                 badge(states[page.id]).padding(5)
               }
-              Text(page.name(at: index)).font(.caption.bold()).lineLimit(2).multilineTextAlignment(.center)
+              Text("Page \(index + 1)").font(.caption.bold())
               if case .failed(let message)? = states[page.id] {
                 Text(message).font(.caption2).foregroundStyle(.orange).lineLimit(3)
               }
