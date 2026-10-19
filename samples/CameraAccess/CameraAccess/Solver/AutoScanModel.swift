@@ -24,6 +24,10 @@ final class AutoScanModel {
   private(set) var pageStates: [UUID: PageState] = [:]
   private(set) var attempts = 0
   private(set) var needsKey = false
+  /// Increments on every failed finish for a missing key, so the view reopens Settings each time.
+  private(set) var keyPrompts = 0
+  /// The saved pages produced the current PDF. Editing a page re-opens the packet; Start begins a new one.
+  private(set) var packetSolved = false
   var showPDF = false
   var voiceGuidance = true
   var voiceCommands = false
@@ -34,7 +38,7 @@ final class AutoScanModel {
   var solveWhileScanning = true
   var isRunning: Bool { [.connecting, .seeking, .awaitingNext, .capturing, .checking, .solving, .saving].contains(phase) }
   var isCollecting: Bool { [.seeking, .awaitingNext, .capturing, .checking].contains(phase) }
-  var canFinish: Bool { !pages.isEmpty && [.idle, .failed, .seeking, .awaitingNext].contains(phase) }
+  var canFinish: Bool { !pages.isEmpty && !packetSolved && [.idle, .failed, .seeking, .awaitingNext].contains(phase) }
   var solvedPages: Int { pages.filter { pageStates[$0.id] == .solved }.count }
 
   @ObservationIgnored private let camera: any ScanCamera
@@ -70,6 +74,11 @@ final class AutoScanModel {
   @ObservationIgnored private var jobErrors: [PageJobKey: String] = [:]
   /// Pages already re-solved once to claim an item that both neighbors skipped.
   @ObservationIgnored private var claimed: Set<PageJobKey> = []
+  @ObservationIgnored private var unreadable: Set<PageJobKey> = []
+  // Fuller spoken help is given once per scan run; later cues stay short.
+  @ObservationIgnored private var helpGiven: Set<String> = []
+  @ObservationIgnored private var lastGestureHint = -Double.infinity
+  @ObservationIgnored private var nextHintGiven = false
 
   init(camera: any ScanCamera, analyzer: any PageAnalyzing = PageAnalyzer(),
        solver: any PageSolving = PageSolver(), saver: any SolutionSaving = SolutionStore(),
@@ -78,8 +87,10 @@ final class AutoScanModel {
     self.camera = camera; self.analyzer = analyzer; self.solver = solver; self.saver = saver
     self.draft = draft; self.voice = voice; self.configurationProvider = configurationProvider
     pages = draft.load()
+    packetSolved = !pages.isEmpty && draft.isSolved
     loadThumbnails()
-    if !pages.isEmpty { guide = "Restored \(pages.count) saved pages. Continue scanning, or finish to solve them." }
+    if packetSolved { guide = "Your last packet is solved. Tap Start for a new packet, or retake a page to fix it." }
+    else if !pages.isEmpty { guide = "Restored \(pages.count) saved pages. Continue scanning, or finish to solve them." }
     camera.onFrame = { [weak self] image in self?.receive(image) }
     camera.onProblem = { [weak self] message in
       guard let self, self.isRunning else { return }
@@ -108,10 +119,12 @@ final class AutoScanModel {
       guide = "\(Self.maxPages) pages saved. Finish this packet first."; return
     }
     if let index, !pages.indices.contains(index) { return }
+    if index == nil && packetSolved { clearPacket() } // one button: after a PDF, Start begins a new packet
     begin(imported: false); replacing = index
-    planFinal = false
+    planFinal = false; helpGiven = []
     refreshSolveSetup()
     syncJobs()
+    let keyMissing = (try? configurationProvider().validate()) == nil
     let id = runID
     phase = .connecting; guide = "Connecting to your glasses…"
     worker = Task { [weak self] in
@@ -122,15 +135,21 @@ final class AutoScanModel {
           await voice.startCommands()
           try Task.checkCancellation(); guard runID == id else { return }
         } else { voiceStatus = ""; voice.prepareOutput() }
+        if voiceGuidance && privateAudio && !voice.routeIsPrivate {
+          voiceStatus = "Glasses audio isn't connected, so directions are shown on screen only."
+        }
         guide = "Connecting to your glasses…"
         try await camera.start(); try Task.checkCancellation()
         guard runID == id else { return }
         phase = .seeking
         if let index {
           guide = "Show page \(index + 1) again, close and steady."; say("Show page \(index + 1) again.")
+        } else if keyMissing {
+          guide = "No API key yet. Pages will be saved; add a key in Settings before you finish."
+          say("Ready. No API key yet, so pages are only saved. Add a key in Settings before you finish.")
         } else {
           guide = "Look at page \(pages.count + 1), close and steady. Thumbs-up when you're done."
-          say(pages.isEmpty ? "Ready. Look at the first page." : "Ready for page \(pages.count + 1).")
+          say(pages.isEmpty ? "Ready. Look at the first page. Give a thumbs-up when you're done." : "Ready for page \(pages.count + 1).")
         }
       } catch { guard runID == id else { return }; fail(error.localizedDescription) }
     }
@@ -139,6 +158,7 @@ final class AutoScanModel {
   func importPhoto(_ data: Data, replacing index: Int? = nil) {
     guard !isRunning, pages.count < Self.maxPages || index != nil else { return }
     if let index, !pages.indices.contains(index) { return }
+    if index == nil && packetSolved { clearPacket() }
     begin(imported: true); replacing = index
     refreshSolveSetup()
     let id = runID; phase = .checking; guide = "Checking the selected photo…"
@@ -163,13 +183,15 @@ final class AutoScanModel {
       finishScanning()
     case .next:
       if phase == .awaitingNext { nextPage() }
-      else if phase == .seeking { forceCapture = true; guide = "Taking it as soon as the writing is clear…" }
+      else if phase == .seeking {
+        forceCapture = true; guide = "Taking it as soon as the writing is clear…"; say("Taking it now.")
+      }
     case .retakeLast:
       guard !pages.isEmpty, [.seeking, .awaitingNext].contains(phase) else { return }
       replacing = pages.count - 1; attempts = 0; forceCapture = false
       gate.reset(); turnGate.reset(); progress = 0; phase = .seeking
       guide = "Retaking page \(pages.count). The old photo stays until the new one is clear."
-      say("Retaking page \(pages.count).")
+      say("Retaking page \(pages.count). Show it again.")
     case .cancel: stop()
     }
   }
@@ -177,13 +199,13 @@ final class AutoScanModel {
   func removePage(at index: Int) {
     guard !isRunning else { return }
     do {
-      pages = try draft.remove(at: index, from: pages); pruneThumbnails()
+      pages = try draft.remove(at: index, from: pages); pruneThumbnails(); packetSolved = false
       guide = "\(pages.count) pages saved."; refreshSolveSetup(); syncJobs()
     } catch { guide = "Could not remove the saved page. \(error.localizedDescription)" }
   }
   func reloadDraft() {
     guard !isRunning else { return }
-    pages = draft.load(); loadThumbnails(); refreshPageStates()
+    pages = draft.load(); packetSolved = !pages.isEmpty && draft.isSolved; loadThumbnails(); refreshPageStates()
   }
   func newBatch() {
     guard !isRunning else { return }
@@ -214,6 +236,7 @@ final class AutoScanModel {
     if !jobs.isEmpty { beginBackgroundWork() } // let page solves in flight finish while iOS allows
     guard isCollecting else { return } // `connecting` may hand off to Meta AI for permission
     pauseScanning("Paused when the app left the screen. Your pages are saved; tap Continue when ready.")
+    say("Scanning paused. Unlock your phone and tap Continue.")
   }
   func viewDisappeared() {
     guard isCollecting || phase == .connecting else { return }
@@ -256,11 +279,20 @@ final class AutoScanModel {
         if gesturesEnabled {
           if let gesture = gestureGate.observe(value.gesture, at: time) { handle(gesture: gesture); return }
           // Never photograph or page-turn while a command hand is raised.
-          if value.gesture != nil { gate.reset(); progress = 0; guide = "Hold the gesture for a moment…"; return }
+          if value.gesture != nil {
+            gate.reset(); progress = 0; guide = "Hold the gesture for a moment…"
+            if time - lastGestureHint > 3 { lastGestureHint = time; say("Hold.") }
+            return
+          }
         }
         if phase == .awaitingNext {
           if pages.count < Self.maxPages, turnGate.observe(value, at: time) { nextPage() }
           else if time - awaitingSince > 4, value.acceptable, !value.closeEnough { speakCue(.closer, at: time) }
+          else if time - awaitingSince > 6, value.acceptable, !nextHintGiven {
+            // Look-alike pages may not register as a page turn.
+            nextHintGiven = true
+            say("If this is a new page, press the capture button, or tap Next page on the phone.")
+          }
           return
         }
         progress = gate.observe(value, at: time)
@@ -311,7 +343,8 @@ final class AutoScanModel {
   /// The still exists on the glasses: release the wearer to turn the page while it transfers.
   private func shutter() {
     guard phase == .capturing else { return }
-    guide = "Got it. Turn to the next page while it saves."; say("Got it.")
+    guide = "Got it. Turn to the next page while it saves."
+    say(helpGiven.insert("shutter").inserted ? "Got it. Turn the page." : "Got it.")
   }
   /// A dropped transfer is retried by looking at the page again; repeated failures stop with the pages kept.
   private func captureFailed(_ error: any Error, id: UUID) async {
@@ -357,6 +390,7 @@ final class AutoScanModel {
       let index = replacing ?? pages.count
       let replacedEarlierPage = replacing.map { $0 < pages.count - 1 } ?? false
       pages = try draft.add(photo.jpeg, to: pages, replacing: replacing)
+      packetSolved = false
       let page = pages[index]
       if let thumbnail = photo.thumbnail { thumbnails[page.id] = UIImage(cgImage: thumbnail) }
       capturedPreview = thumbnails[page.id]; replacing = nil; attempts = 0
@@ -381,9 +415,10 @@ final class AutoScanModel {
         try await restart?.value
         guard runID == id else { return }
         if finishRequested { finishRequested = false; phase = .idle; finishScanning(); return }
-        phase = .awaitingNext; progress = 0; awaitingSince = ProcessInfo.processInfo.systemUptime
+        phase = .awaitingNext; progress = 0; awaitingSince = ProcessInfo.processInfo.systemUptime; nextHintGiven = false
         if pages.count < Self.maxPages {
-          guide = "Page \(index + 1) saved. Turn the page, or give a thumbs-up to finish."; say("Page \(index + 1) saved.")
+          guide = "Page \(index + 1) saved. Turn the page, or give a thumbs-up to finish."
+          say(helpGiven.insert("saved").inserted ? "Page \(index + 1) saved. Turn the page, or thumbs-up to finish." : "Page \(index + 1) saved.")
         } else {
           guide = "Page limit reached. Give a thumbs-up to finish."; say(guide)
         }
@@ -419,16 +454,19 @@ final class AutoScanModel {
 
   func finishScanning() {
     if [.capturing, .checking].contains(phase) {
-      finishRequested = true; guide = "Finishing after this photo is saved."; return
+      finishRequested = true; guide = "Finishing after this photo is saved."; say("Finishing after this photo."); return
     }
     guard canFinish else { return }
     let configuration = configurationProvider()
     do { try configuration.validate(); needsKey = false }
-    catch { stop(); needsKey = true; guide = error.localizedDescription; return }
+    catch {
+      stop(); needsKey = true; keyPrompts += 1; guide = error.localizedDescription
+      say(error.localizedDescription + " Open Settings on your phone."); return
+    }
     begin(imported: true)
     solveSetup = configuration // a corrected key or model applies to every page still to solve
     planFinal = true
-    jobErrors = [:]; claimed = [] // finishing again retries only the pages that failed
+    jobErrors = [:]; claimed = []; unreadable = [] // finishing again retries only the pages that failed
     phase = .solving; progress = 0
     syncJobs()
     let remaining = pages.count - solvedPages
@@ -445,6 +483,7 @@ final class AutoScanModel {
     for (key, job) in jobs where !wanted.contains(key) { job.task.cancel(); jobs[key] = nil }
     results = results.filter { ids.contains($0.key.page) }
     jobErrors = jobErrors.filter { wanted.contains($0.key) }
+    unreadable = unreadable.filter { wanted.contains($0) }
     for key in desired where results[key] == nil && jobs[key] == nil && jobErrors[key] == nil {
       startJob(key, configuration)
     }
@@ -476,7 +515,13 @@ final class AutoScanModel {
     jobs[key] = nil
     switch outcome {
     case .success(let value): results[key] = (number, value)
-    case .failure(let error): jobErrors[key] = error.localizedDescription
+    case .failure(let error):
+      jobErrors[key] = error.localizedDescription
+      if case AIResultError.unreadable(let message)? = error as? AIResultError {
+        unreadable.insert(key)
+        // Say it now, while the wearer can still fix it, not only after Finish.
+        if isCollecting { solveStatus = message + " Retake it from the phone."; say(message) }
+      }
     }
     refreshPageStates()
     if phase == .solving { advanceFinish() }
@@ -514,8 +559,11 @@ final class AutoScanModel {
       let numbers = failed.compactMap { key in pages.firstIndex { $0.id == key.page }.map { String($0 + 1) } }
       let detail = jobErrors[failed[0]] ?? ""
       let summary = failed.count == 1 ? detail : "Pages \(numbers.joined(separator: ", ")) could not be solved. \(detail)"
+      let advice = failed.contains(where: unreadable.contains)
+        ? " Retake that page with the Retake button under it, then tap Done; sending the same photo again won't help."
+        : " Solved pages are kept; tap Done to retry only the failed pages."
       endBackgroundWork()
-      fail(summary + " Solved pages are kept; finish again to retry only the rest.")
+      fail(summary + advice)
       return
     }
     let entries: [(number: Int, result: PageResult)] = keys.compactMap { key in
@@ -549,8 +597,9 @@ final class AutoScanModel {
         result = saved; phase = .finished
         let review = solution.problems.contains { $0.reviewNote?.hasPrefix("NEEDS REVIEW") == true }
         guide = review ? "Your PDF is ready. Check items marked NEEDS REVIEW." : "Your PDF is ready."
-        // The PDF folder now holds every original photo; the next Start begins a fresh packet.
-        clearPacket()
+        // Keep the pages and cached answers so one page can be retaken and the PDF rebuilt quickly.
+        // The next Start (or a new photo) begins a fresh packet; the PDF folder holds every original.
+        try? draft.markSolved(); packetSolved = true
         restoreIdleTimer(); endBackgroundWork(); showPDF = true
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         say("Your solution PDF is ready on your phone.")
@@ -561,7 +610,8 @@ final class AutoScanModel {
   private func clearPacket() {
     do { try draft.clear() } catch { guide = "Could not clear the previous draft. \(error.localizedDescription)"; return }
     for job in jobs.values { job.task.cancel() }
-    jobs = [:]; results = [:]; jobErrors = [:]; claimed = []; solveSetup = nil; planFinal = false
+    jobs = [:]; results = [:]; jobErrors = [:]; claimed = []; unreadable = []; solveSetup = nil; planFinal = false
+    packetSolved = false
     pages = []; thumbnails = [:]; pageStates = [:]; solveStatus = ""
     let solver = self.solver
     Task { await solver.forget(keeping: []) }

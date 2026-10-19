@@ -22,6 +22,7 @@ struct AutoScanView: View {
   @AppStorage("handGestures") private var handGestures = true
   @AppStorage("glassesButtons") private var glassesButtons = true
   @AppStorage("solveWhileScanning") private var solveWhileScanning = true
+  @AppStorage("solverModeNotice") private var modeNotice = false
 
   var body: some View {
     NavigationStack {
@@ -30,6 +31,13 @@ struct AutoScanView: View {
           Text("One button. Every page. One PDF.").font(.title2.bold())
           Text("Tap Start and look at each page; it captures automatically. Give a 👍 thumbs-up (or double-tap the glasses) to solve. Pages are solved while you scan.")
             .foregroundStyle(.secondary)
+          if modeNotice && !importOnly {
+            HStack(alignment: .top) {
+              Text("For speed, 2.0 solves with one provider. Choose Both · cross-check in Settings to compare two providers.")
+                .font(.footnote)
+              Button("OK") { modeNotice = false }.font(.footnote.bold())
+            }.padding(10).background(.yellow.opacity(0.2)).clipShape(RoundedRectangle(cornerRadius: 10))
+          }
           ScanViewfinder(model: model)
           HStack(spacing: 10) {
             Image(systemName: phaseIcon).foregroundStyle(model.phase == .failed ? .orange : .mint)
@@ -89,7 +97,7 @@ struct AutoScanView: View {
           }
         }
       }
-      .onChange(of: model.needsKey) { _, needed in if needed { settings = true } }
+      .onChange(of: model.keyPrompts) { _, _ in settings = true }
       .onChange(of: scenePhase) { _, value in if value == .background { model.backgrounded() } }
       // Switching tabs stops the camera only; page solving and the PDF keep going.
       .onDisappear { model.viewDisappeared() }
@@ -122,7 +130,7 @@ struct AutoScanView: View {
           Button {
             applySettings(); model.start()
           } label: {
-            Label(model.pages.isEmpty ? "Start scanning" : "Continue scanning", systemImage: "viewfinder")
+            Label(model.pages.isEmpty ? "Start scanning" : (model.packetSolved ? "Start a new packet" : "Continue scanning"), systemImage: "viewfinder")
               .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)
           }.buttonStyle(.borderedProminent).accessibilityIdentifier("start_auto_scan")
         }
@@ -142,8 +150,8 @@ struct AutoScanView: View {
       Text("Silent controls").font(.subheadline.bold())
       Text("👍 Thumbs-up, held about one second in front of the glasses: finish and solve.")
       Text("👎 Thumbs-down: retake the last page.")
-      Text("Glasses: double-tap the touchpad or double-press the capture button to finish. Press the capture button for the next page now; hold it to retake. A single tap pauses or resumes the glasses.")
-      Text("Directions are spoken quietly through the glasses only. Keep this app open and the phone unlocked while scanning; solving continues if you switch tabs.")
+      Text("Glasses: double-tap the touchpad or double-press the capture button to finish. Press the capture button for the next page now; hold it to retake. Buttons wake up a moment after each photo. A single tap on the touchpad pauses or resumes; touch-and-hold on the touchpad stops the glasses session, so avoid it.")
+      Text("Directions are spoken quietly through the glasses only. Keep this app open and the phone unlocked while scanning; solving continues if you switch tabs. After the PDF, Retake or Replace a page to fix it and tap Done to rebuild the PDF.")
     }.font(.footnote).foregroundStyle(.secondary)
   }
 

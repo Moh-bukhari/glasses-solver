@@ -50,7 +50,11 @@ enum SolverKeychain {
     guard defaults.integer(forKey: "settingsVersion") < 2 else { return }
     if defaults.string(forKey: "solverModel") == "gpt-5.4" { defaults.set(SolverConfiguration.openAIDefault, forKey: "solverModel") }
     if defaults.string(forKey: "claudeModel") == "claude-sonnet-5-5" { defaults.set(SolverConfiguration.claudeDefault, forKey: "claudeModel") }
-    if defaults.string(forKey: "solverMode") == SolverMode.both.rawValue { defaults.set(defaultMode().rawValue, forKey: "solverMode") }
+    if defaults.string(forKey: "solverMode") == SolverMode.both.rawValue {
+      defaults.set(defaultMode().rawValue, forKey: "solverMode"); defaults.set(true, forKey: "solverModeNotice")
+    }
+    // 2.0 is controlled by gestures and glasses buttons; an old "on" choice must not keep the microphone open.
+    defaults.set(false, forKey: "voiceCommands")
     defaults.set(2, forKey: "settingsVersion")
   }
 }

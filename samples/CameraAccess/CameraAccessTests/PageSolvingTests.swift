@@ -336,12 +336,16 @@ final class PageSolvingTests: XCTestCase {
   // MARK: Settings
 
   func testOldDefaultsMoveToTheRequestedModelsAndCustomModelsStay() {
-    let defaults = UserDefaults.standard, keys = ["settingsVersion", "solverModel", "claudeModel", "solverMode"]
+    let defaults = UserDefaults.standard
+    let keys = ["settingsVersion", "solverModel", "claudeModel", "solverMode", "voiceCommands", "solverModeNotice"]
     let saved = keys.map { defaults.object(forKey: $0) }
     defer { for (key, value) in zip(keys, saved) { defaults.set(value, forKey: key) } }
     defaults.set(0, forKey: "settingsVersion"); defaults.set("gpt-5.4", forKey: "solverModel")
     defaults.set("claude-sonnet-5-5", forKey: "claudeModel"); defaults.set("both", forKey: "solverMode")
+    defaults.set(true, forKey: "voiceCommands"); defaults.set(false, forKey: "solverModeNotice")
     SolverKeychain.migrateDefaults()
+    XCTAssertFalse(defaults.bool(forKey: "voiceCommands"), "2.0 is controlled without voice; the microphone stays off.")
+    XCTAssertTrue(defaults.bool(forKey: "solverModeNotice"), "Moving off cross-check is announced once.")
     XCTAssertEqual(defaults.string(forKey: "solverModel"), "gpt-6.1-sol")
     XCTAssertEqual(defaults.string(forKey: "claudeModel"), "claude-opus-5-5")
     XCTAssertNotEqual(defaults.string(forKey: "solverMode"), "both")

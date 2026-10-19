@@ -115,7 +115,11 @@ final class AutoScanCamera: ScanCamera {
       Task { @MainActor in
         guard let self, self.generation == id else { return }
         switch state {
-        case .stopped: self.onProblem?("Glasses disconnected. Put them on and start again.")
+        case .stopped:
+          // Touch-and-hold on the touchpad stops the session while the glasses stay connected.
+          self.onProblem?(self.selector.activeDevice != nil
+            ? "Scanning was stopped from the glasses. Tap Continue scanning on your phone."
+            : "Glasses disconnected. Put them on and start again.")
         case .paused: self.notePause(true)
         case .started: self.notePause(self.streamState == .paused)
         default: break // starting/stopping are transitions, not a resume

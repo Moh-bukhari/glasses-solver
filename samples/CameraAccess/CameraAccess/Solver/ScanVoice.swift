@@ -21,6 +21,8 @@ protocol ScanSpeaking: AnyObject {
   var privateOnly: Bool { get set }
   /// Output-only audio session for cues when the microphone is not in use.
   func prepareOutput()
+  /// Whether speech currently reaches glasses or headphones rather than the phone speaker.
+  var routeIsPrivate: Bool { get }
   func startCommands() async
   func stopCommands()
   func say(_ message: String, volume: Float)
@@ -207,6 +209,7 @@ final class ScanVoice: NSObject, ScanSpeaking, AVSpeechSynthesizerDelegate {
     try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
     try? session.setActive(true)
   }
+  var routeIsPrivate: Bool { Self.privateRoute }
   static var privateRoute: Bool {
     AVAudioSession.sharedInstance().currentRoute.outputs.contains {
       [.bluetoothA2DP, .bluetoothHFP, .bluetoothLE, .headphones].contains($0.portType)
