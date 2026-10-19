@@ -1,12 +1,18 @@
 # Glasses Solver
 
-**Start with the [AI handoff and operating guide](https://github.com/Moh-bukhari/glasses-solver/blob/solver-app/AI-HANDOFF.md).** It explains the goals, complete app workflows, code map, setup/build/test process, known issues and next priorities.
+**Continuing this project with an AI? Read [AI-HANDOFF.md](AI-HANDOFF.md) first.** It covers the goal, complete workflows, code map, setup/build/test instructions, known issues, verification evidence and next priorities. The current app is on [`solver-app`](https://github.com/Moh-bukhari/glasses-solver/tree/solver-app).
 
-The active iPhone app is on **[`solver-app`](https://github.com/Moh-bukhari/glasses-solver/tree/solver-app)** under `samples/CameraAccess`. This default `main` branch retains the upstream Meta sample baseline until the app work is merged. For installation, see [SOLVER-SETUP.md on solver-app](https://github.com/Moh-bukhari/glasses-solver/blob/solver-app/SOLVER-SETUP.md). Coding agents should follow [AI-HANDOFF.md](AI-HANDOFF.md) and [AGENTS.md](AGENTS.md).
+Personal iPhone app (1.3.1): **scan papers → say “finish scanning” → OpenAI + Claude review → one combined PDF**.
 
-The Meta SDK documentation below describes the upstream baseline.
+See [installation and usage](SOLVER-SETUP.md). Download the IPA from a successful [cloud build on solver-app](https://github.com/Moh-bukhari/glasses-solver/actions/workflows/build-solver.yml), with both build and verification jobs passing. Code is developed on the `solver-app` branch (PR #1).
+
+Capture close-up photos with directional voice cues, saved-page announcements, and a quiet 5% speech default. No clean background, paper corners, OCR or image cleanup is required. Collect up to 12 photos before any AI upload; drafts survive pauses and failures. OpenAI and Claude can independently solve the packet and reconcile their answers against a question/subpart checklist. Single-provider modes are also available. One PDF contains all inventoried answers, review flags and source photos.
+
+Keep the app foregrounded and unlocked. On-device English voice commands require microphone/speech permission; visible controls remain available. Simulator fixtures do not verify physical glasses, microphone routing or mathematical accuracy with live APIs.
 
 ---
+
+## Upstream Meta SDK documentation
 
 # Meta Wearables Device Access Toolkit for iOS
 

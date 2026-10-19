@@ -22,11 +22,16 @@ struct MainAppView: View {
   var viewModel: WearablesViewModel
 
   var body: some View {
-    if viewModel.registrationState == .registered {
-      CameraView(wearables: wearables, wearablesVM: viewModel)
-    } else {
-      // User not registered - show registration/onboarding flow
-      HomeScreenView(viewModel: viewModel)
+    TabView {
+      AutoScanView(wearablesVM: viewModel).tabItem { Label("Auto Scan", systemImage: "viewfinder") }
+      Group {
+        if viewModel.registrationState == .registered {
+          CameraView(wearables: wearables, wearablesVM: viewModel)
+        } else {
+          HomeScreenView(viewModel: viewModel)
+        }
+      }.tabItem { Label("Glasses", systemImage: "eyeglasses") }
+      SolutionHistoryView().tabItem { Label("PDFs", systemImage: "doc.richtext") }
     }
   }
 }

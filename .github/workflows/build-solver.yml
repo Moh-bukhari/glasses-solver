@@ -1,0 +1,75 @@
+name: Build Glasses Solver IPA
+on:
+  workflow_dispatch:
+  push:
+    branches: [solver-app]
+    paths: ['samples/CameraAccess/**', '.github/workflows/build-solver.yml']
+permissions:
+  contents: read
+concurrency:
+  group: solver-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: macos-26
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test automatic scan pipeline
+        run: |
+          set -o pipefail
+          xcodebuild test -project samples/CameraAccess/CameraAccess.xcodeproj \
+            -scheme SolverTests -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.4.1' \
+            -only-testing:CameraAccessTests/AutoScanTests \
+            -parallel-testing-enabled NO -resultBundlePath TestResults.xcresult \
+            -test-timeouts-enabled YES -default-test-execution-time-allowance 90 \
+            CODE_SIGN_IDENTITY="-" CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES \
+            DEVELOPMENT_TEAM="" 2>&1 | tee tests.log
+      - name: Export test evidence
+        if: always()
+        run: |
+          if [ -d TestResults.xcresult ]; then
+            xcrun xcresulttool export attachments --path TestResults.xcresult --output-path test-evidence
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: |
+            tests.log
+            TestResults.xcresult
+            test-evidence
+  build:
+    runs-on: macos-26
+    timeout-minutes: 15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build unsigned iPhone app
+        run: |
+          set -o pipefail
+          xcodebuild -version
+          xcodebuild -project samples/CameraAccess/CameraAccess.xcodeproj \
+            -scheme CameraAccess -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build 2>&1 | tee build.log
+      - name: Package for iloader
+        run: |
+          mkdir -p package/Payload
+          cp -R build/Build/Products/Release-iphoneos/CameraAccess.app package/Payload/
+          cd package
+          zip -qry ../GlassesSolver-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GlassesSolver-IPA
+          path: GlassesSolver-unsigned.ipa
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-log
+          path: build.log

@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Camera Access</string>
+	<string>Glasses Solver</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -27,7 +27,7 @@
 			<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>cameraaccess</string>
+				<string>glassessolver</string>
 			</array>
 		</dict>
 	</array>
@@ -39,7 +39,7 @@
 	<dict>
 		<key>AppLinkURLScheme</key>
 		<!-- Tell DAT your URL scheme so it can be called back from Meta AI -->
-		<string>cameraaccess://</string>
+		<string>glassessolver://</string>
 		<key>MetaAppID</key>
 		<!-- Without Developer Mode, this key will need to be set with ID from the app registered in Wearables Developer Center -->
 		<string>$(META_APP_ID)</string>
@@ -50,9 +50,16 @@
 		<key>TeamID</key>
 		<string>$(DEVELOPMENT_TEAM)</string>
 	</dict>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>UISupportedExternalAccessoryProtocols</key>
+	<array><string>com.meta.ar.wearable</string></array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>processing</string>
+		<string>external-accessory</string>
 		<string>bluetooth-central</string>
 		<string>audio</string>
 		<string>bluetooth-peripheral</string>
@@ -72,8 +79,10 @@
 	<string>This app needs access to save photos captured from your glasses.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>This app needs camera access to stream from your phone's camera as a mock device feed.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Recognize on-device commands to finish scanning, scan the next page, or retake a page hands-free.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>This app needs microphone access to record sound from your glasses' microphone alongside video.</string>
+	<string>Listen for hands-free scan commands and record audio when you choose video recording.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

@@ -1,8 +1,12 @@
-# Glasses Solver: find the active app first
+# Glasses Solver: instructions for coding agents
 
-The current Glasses Solver app is developed on `solver-app` under `samples/CameraAccess`. This default `main` branch retains the upstream baseline. Read the authoritative [AI handoff and operating guide](https://github.com/Moh-bukhari/glasses-solver/blob/solver-app/AI-HANDOFF.md), [app instructions](https://github.com/Moh-bukhari/glasses-solver/blob/solver-app/AGENTS.md), and [project lessons](https://github.com/Moh-bukhari/glasses-solver/blob/solver-app/tasks/lessons.md) before changing the solver.
+The active personal app lives on `solver-app` in `samples/CameraAccess`. Start with [AI-HANDOFF.md](AI-HANDOFF.md), [SOLVER-SETUP.md](SOLVER-SETUP.md), and [tasks/lessons.md](tasks/lessons.md). The handoff records the user goal, architecture, actual workflows, build/test/install commands, release evidence and remaining device checks without requiring earlier chat history.
 
-Inspect branch and uncommitted work, then use the active app checkout for implementation. Preserve other edits. Do not mistake the upstream samples below for the latest solver or merge app code merely to update documentation. Keep this entry point linked to the canonical guide if the active branch changes.
+- Inspect current branch, code, uncommitted work and latest user requirements before editing. The repository contains other upstream sample apps; they are not the Glasses Solver target.
+- Preserve forgiving close-up capture, ordered saved pages, explicit Finish before solver uploads, quiet cues, complete-answer validation and retained drafts on failure.
+- For substantive work, define acceptance criteria and verify the affected behavior. Keep simulated evidence distinct from physical glasses/microphone and paid API tests.
+- Keep AI-HANDOFF and user setup instructions current when behavior, release status or operating commands change. Record lessons from incorrect assumptions; do not maintain conflicting architecture copies in agent entry files.
+- The technical Meta SDK reference below remains applicable to SDK integration work.
 
 ---
 

@@ -7,6 +7,15 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		BA7C00000000000000000032 /* ScanVoice.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C00000000000000000031; };
+		BA7C00000000000000000022 /* ScanDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C00000000000000000021; };
+		BA7C00000000000000000012 /* BatchSolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C00000000000000000011; };
+		2982D882FF0CB083E037654E /* SolverService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C81611D51712FF60636F7C38; };
+		A0EADB51FEB0A4BBC4CBC386 /* ScanQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99627FE9E0D573A0526D4893; };
+		69C00752900F44FD71C9AFD5 /* AutoScanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3C17C4B548B6BF3A1D3025D; };
+		7A8F8F8849FAFF6694802945 /* AutoScanModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 505C167EBC5FA348132A8B77; };
+		F616FCBEA1EC53A2778DD715 /* AutoScanCamera.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CBDB021834A3A089EED0C25; };
+		A10000000000000000000001 /* SolverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000002; };
 		8F8F00782E8ACB4600A4BDAF /* WearablesViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F8F00772E8ACB4500A4BDAF /* WearablesViewModel.swift */; };
 		8FD96B7F2E6F0A9800F56AB1 /* CameraAccessApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FD96B792E6F0A9800F56AB1 /* CameraAccessApp.swift */; };
 		8FD96B812E6F0A9800F56AB1 /* HomeScreenView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FD96B722E6F0A9800F56AB1 /* HomeScreenView.swift */; };
@@ -71,6 +80,15 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		BA7C00000000000000000031 /* ScanVoice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/ScanVoice.swift; sourceTree = "<group>"; };
+		BA7C00000000000000000021 /* ScanDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/ScanDraft.swift; sourceTree = "<group>"; };
+		BA7C00000000000000000011 /* BatchSolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/BatchSolver.swift; sourceTree = "<group>"; };
+		C81611D51712FF60636F7C38 /* SolverService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/SolverService.swift; sourceTree = "<group>"; };
+		99627FE9E0D573A0526D4893 /* ScanQuality.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/ScanQuality.swift; sourceTree = "<group>"; };
+		F3C17C4B548B6BF3A1D3025D /* AutoScanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/AutoScanView.swift; sourceTree = "<group>"; };
+		505C167EBC5FA348132A8B77 /* AutoScanModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/AutoScanModel.swift; sourceTree = "<group>"; };
+		9CBDB021834A3A089EED0C25 /* AutoScanCamera.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/AutoScanCamera.swift; sourceTree = "<group>"; };
+		A10000000000000000000002 /* SolverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SolverView.swift; sourceTree = "<group>"; };
 		3A3A3A3A3A3A3A3A3A3A3A3A /* CameraAccess.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CameraAccess.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8F8F00772E8ACB4500A4BDAF /* WearablesViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WearablesViewModel.swift; sourceTree = "<group>"; };
 		8FD96B6F2E6F0A9800F56AB1 /* CameraViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraViewModel.swift; sourceTree = "<group>"; };
@@ -191,6 +209,7 @@
 				8FFD605E2E84A2F70035E446 /* DebugMenuView.swift */,
 				8FD96B722E6F0A9800F56AB1 /* HomeScreenView.swift */,
 				8FFD605F2E84A2F70035E446 /* MainAppView.swift */,
+				A10000000000000000000002 /* SolverView.swift */,
 				8FD96B742E6F0A9800F56AB1 /* CapturePreviewView.swift */,
 				8FFD60532E849D0D0035E446 /* RegistrationView.swift */,
 			);
@@ -206,6 +225,14 @@
 				8FD96B762E6F0A9800F56AB1 /* Views */,
 				8FD96B772E6F0A9800F56AB1 /* Assets.xcassets */,
 				8FD96B782E6F0A9800F56AB1 /* CameraAccess.entitlements */,
+				9CBDB021834A3A089EED0C25 /* AutoScanCamera.swift */,
+				BA7C00000000000000000011 /* BatchSolver.swift */,
+				BA7C00000000000000000021 /* ScanDraft.swift */,
+				BA7C00000000000000000031 /* ScanVoice.swift */,
+				505C167EBC5FA348132A8B77 /* AutoScanModel.swift */,
+				F3C17C4B548B6BF3A1D3025D /* AutoScanView.swift */,
+				99627FE9E0D573A0526D4893 /* ScanQuality.swift */,
+				C81611D51712FF60636F7C38 /* SolverService.swift */,
 				8FD96B792E6F0A9800F56AB1 /* CameraAccessApp.swift */,
 				8FD96B7B2E6F0A9800F56AB1 /* Info.plist */,
 			);
@@ -396,6 +423,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F616FCBEA1EC53A2778DD715 /* AutoScanCamera.swift in Sources */,
+				BA7C00000000000000000012 /* BatchSolver.swift in Sources */,
+				BA7C00000000000000000022 /* ScanDraft.swift in Sources */,
+				BA7C00000000000000000032 /* ScanVoice.swift in Sources */,
+				7A8F8F8849FAFF6694802945 /* AutoScanModel.swift in Sources */,
+				69C00752900F44FD71C9AFD5 /* AutoScanView.swift in Sources */,
+				A0EADB51FEB0A4BBC4CBC386 /* ScanQuality.swift in Sources */,
+				2982D882FF0CB083E037654E /* SolverService.swift in Sources */,
 				8FD96B7F2E6F0A9800F56AB1 /* CameraAccessApp.swift in Sources */,
 				8FD96B812E6F0A9800F56AB1 /* HomeScreenView.swift in Sources */,
 				8FFD60542E849D0D0035E446 /* RegistrationView.swift in Sources */,
@@ -408,6 +443,7 @@
 				8FD96B872E6F0A9800F56AB1 /* CameraViewModel.swift in Sources */,
 				8FFD60602E84A2F70035E446 /* MainAppView.swift in Sources */,
 				8FFD60612E84A2F70035E446 /* DebugMenuView.swift in Sources */,
+				A10000000000000000000001 /* SolverView.swift in Sources */,
 				8FD96B8A2E6F0A9800F56AB1 /* CapturePreviewView.swift in Sources */,
 				E66D30242E7DA71900470B48 /* MockDeviceKitButton.swift in Sources */,
 				8F8F00782E8ACB4600A4BDAF /* WearablesViewModel.swift in Sources */,
@@ -461,7 +497,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = CameraAccess/CameraAccess.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
@@ -472,8 +508,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.meta.wearables.external.CameraAccess;
+				MARKETING_VERSION = 1.3.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolver;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -488,7 +524,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = CameraAccess/CameraAccess.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
@@ -498,8 +534,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.meta.wearables.external.CameraAccess;
+				MARKETING_VERSION = 1.3.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolver;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -512,14 +548,14 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 5;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.meta.wearables.external.CameraAccessUITests;
+				MARKETING_VERSION = 1.3.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolverUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
@@ -538,14 +574,14 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 5;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.meta.wearables.external.CameraAccessUITests;
+				MARKETING_VERSION = 1.3.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolverUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -564,14 +600,14 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 5;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.meta.wearables.external.CameraAccessTests;
+				MARKETING_VERSION = 1.3.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolverTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -593,14 +629,14 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 5;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.meta.wearables.external.CameraAccessTests;
+				MARKETING_VERSION = 1.3.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolverTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
