@@ -106,7 +106,7 @@ History: the user confirmed that 1.x glasses capture and PDF generation worked. 
 | `awaitingNext` | Wait for a changed page, the capture button, or a finish gesture |
 | `solving` | Wait for the remaining page jobs |
 | `saving` | Combine results and write the PDF and originals |
-| `finished` | PDF presented; draft cleared |
+| `finished` | PDF presented; packet kept and marked solved until the next Start, a new photo, or New packet |
 | `failed` | Actionable error; pages and cached page results retained |
 
 `AutoScanCamera` owns the Meta SDK `DeviceSession`, `Camera`, `Stream`, `Photo` and `Inputs`:
@@ -289,6 +289,7 @@ Next priorities, **not completed claims**:
 2. A real-API run with a small known-answer packet on each provider. Measure per-page latency and check continuation and skip handling across a question that spans pages.
 3. Check Inputs on Gen 2: activation, double-tap and capture-button events, and whether a capture press also takes a system photo.
 4. Calibrate the gesture thresholds and the quick-hold and half-size still-check gates from logged real frames.
+5. Measure the time from shutter to rearm on the device. The Meta mock reports a critical stream error when the stream restarts after a full photo, and the app then falls back to a full reconnect (`AutoScanModel.resume`). If real glasses do the same, consider BirdSpotter's approach of keeping Photo started and switching only the stream, or recreating only the camera capability.
 
 ## 11. How the next AI should work and leave a handoff
 
