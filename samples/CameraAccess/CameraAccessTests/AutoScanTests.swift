@@ -341,16 +341,20 @@ final class AutoScanTests: XCTestCase {
     // Execute exactly the closures installed in AVAudioEngine and Speech, not a fake listener.
     // An implicitly MainActor callback aborts the process here under Swift 6.
     let tap = voice.makeAudioTap(), resultHandler = voice.makeRecognitionHandler()
-    let usedBackgroundThread = try await Task.detached {
-      let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1))
-      let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1024))
-      buffer.frameLength = 1024
-      buffer.floatChannelData?[0].initialize(repeating: 0, count: 1024)
-      let time = AVAudioTime(sampleTime: 0, atRate: 48000)
-      for _ in 0..<32 { tap(buffer, time) }
-      resultHandler(nil, URLError(.cancelled))
-      return !Thread.isMainThread
-    }.value
+    let usedBackgroundThread = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, any Error>) in
+      DispatchQueue.global(qos: .userInitiated).async { @Sendable in
+        do {
+          let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1))
+          let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1024))
+          buffer.frameLength = 1024
+          buffer.floatChannelData?[0].initialize(repeating: 0, count: 1024)
+          let time = AVAudioTime(sampleTime: 0, atRate: 48000)
+          for _ in 0..<32 { tap(buffer, time) }
+          resultHandler(nil, URLError(.cancelled))
+          continuation.resume(returning: !Thread.isMainThread)
+        } catch { continuation.resume(throwing: error) }
+      }
+    }
     XCTAssertTrue(usedBackgroundThread)
     voice.stopCommands()
   }
