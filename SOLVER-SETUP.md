@@ -36,7 +36,7 @@ The phone must be unlocked, because the app has to be on screen for the glasses 
 2. Look closely at the first question: about a hand's width of text at a time, close enough that the small printed writing is sharp. Hold still for about half a second. Quiet directions (left / right / tilt / closer / hold still) guide you. "Move a little closer: the printed text is too small to read" means the photo wasn't kept.
 3. You hear each question number as it is captured ("Question 1."). Move down to the rest of the question. If a number is skipped, you hear "Question 3 isn't captured yet. Look at it again."
 4. Look at the next question. The one before is saved by itself ("Question 1 saved."), and the new one is scanned straight away, on the same sheet or the next. A question you've finished with is also saved after about 3 seconds with nothing new ("Question 2 saved: 3 photos."), or right away with 👉.
-5. Turn pages as you go. Going back to an earlier question adds the new photos to it ("Question 1 updated"). Questions are solved in the background as you go.
+5. Turn pages as you go. Going back to an earlier question adds the new photos to it ("Question 1 updated"), and so does a part with no question number, such as the rest of a question after a pause. Questions are solved in the background as you go.
 6. When you're done, give a **thumbs-up**. The page in front of you is saved first. You hear "Done scanning. Solving." The PDF opens on the phone as soon as the last page is solved.
 
 Prefer one big photo per page? Settings → Capture → **Full-resolution photo**. It is sharper for a whole page at arm's length, but each photo pauses the camera and takes several seconds.

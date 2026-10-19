@@ -125,7 +125,7 @@ final class AutoScanModel {
   @ObservationIgnored private var missingSpoken: Set<Int> = []
   /// Text is read on a steady frame at most this often (accurate recognition takes ~120-250 ms).
   static let readInterval: TimeInterval = 0.33
-  /// Photos kept for one question when it is scanned again later.
+  /// Photos kept for one question when it is scanned again later: its first two (the statement) and the newest.
   static let maxFramesPerPage = 8
 
   init(camera: any ScanCamera, analyzer: any PageAnalyzing = PageAnalyzer(),
@@ -542,8 +542,8 @@ final class AutoScanModel {
     guard runID == id, phase == .seeking, !ids.isEmpty else { return }
     let kept = ids.compactMap { keptImages[$0] }
     var numbers = pageFrames.questions(headingsOnly: usesHeadings)
-    let merge = replacing == nil && !numbers.isEmpty
-      ? pages.firstIndex { !Set($0.questions).isDisjoint(with: numbers) } : nil
+    let merge = replacing != nil ? nil
+      : numbers.isEmpty ? continuedPage : pages.firstIndex { !Set($0.questions).isDisjoint(with: numbers) }
     if let merge { numbers.formUnion(pages[merge].questions) }
     let earlier = merge.map { pages[$0].frames } ?? []
     let summary = pageSummary()
@@ -552,7 +552,8 @@ final class AutoScanModel {
     do {
       let (jpegs, thumbnail) = try await Task.detached(priority: .userInitiated) {
         let fresh = try images.map { try PageAnalyzer.encodeJPEG($0, quality: 0.9) }
-        let jpegs = Array((try earlier.map { try Data(contentsOf: $0) } + fresh).suffix(limit))
+        let all = try earlier.map { try Data(contentsOf: $0) } + fresh
+        let jpegs = all.count <= limit ? all : Array(all.prefix(2) + all.suffix(limit - 2))
         return (jpegs, PageAnalyzer.thumbnail(jpegs[0])) // a small preview, not a full frame kept per page
       }.value
       guard runID == id else { return }
@@ -579,11 +580,18 @@ final class AutoScanModel {
   private func pageName(_ index: Int) -> String {
     pages.indices.contains(index) ? pages[index].name(at: index) : "Page \(index + 1)"
   }
-  /// The page being scanned: its question numbers once read, else the saved page it replaces, else its position.
+  /// The page being scanned: its question numbers once read, else the saved page it replaces or continues, else its position.
   private var openPageName: String {
     let questions = pageFrames.questions(headingsOnly: usesHeadings)
     if !questions.isEmpty { return QuestionLabels.spoken(Array(questions)) }
-    return pageName(replacing ?? pages.count)
+    return pageName(replacing ?? continuedPage ?? pages.count)
+  }
+  /// In a packet that numbers its questions, a view without a number (the rest of a question, its figure) continues
+  /// the question saved last, so it never becomes an unnamed page.
+  private var continuedPage: Int? {
+    guard replacing == nil, pageFrames.questions(headingsOnly: usesHeadings).isEmpty, let lastSaved,
+      pages.indices.contains(lastSaved), !pages[lastSaved].questions.isEmpty else { return nil }
+    return lastSaved
   }
   /// "3 photos" for the page being scanned (its name already says which questions).
   private func pageSummary() -> String {

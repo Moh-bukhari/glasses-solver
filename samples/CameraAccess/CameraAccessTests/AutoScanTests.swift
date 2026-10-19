@@ -791,6 +791,24 @@ final class AutoScanTests: XCTestCase {
     XCTAssertTrue(names.contains("Question 1") && names.contains("Question 2"), "The AI names pages by question: \(names)")
     model.stop()
   }
+  func testAViewWithoutAQuestionNumberContinuesTheQuestionSavedLast() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: frameSample()), voice = FakeScanVoice()
+    let model = makeModel(camera, analyzer, FakePageSolver(), FakeSolutionSaver(), capture: .frames, voice: voice)
+    await analyzer.setText(text(question1))
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await sendFrames(camera, model: model, seconds: 1.5)
+    model.handle(.next); await waitUntil { model.phase == .awaitingNext && model.pages.count == 1 }
+    model.handle(.next) // the wearer paused, then looks at the rest of question 1
+    await analyzer.setContent(0.3); await analyzer.setText(text(rest))
+    try await sendFrames(camera, model: model, seconds: 1.5)
+    XCTAssertTrue(model.guide.hasPrefix("Question 1: 1 photo"), model.guide)
+    try await show(camera, limit: 15) { model.phase == .awaitingNext }
+    XCTAssertEqual(model.pages.count, 1, "No unnamed page.")
+    XCTAssertEqual(model.pages[0].frames.count, 2); XCTAssertEqual(model.pages[0].questions, [1])
+    XCTAssertTrue(model.guide.hasPrefix("Question 1 updated: 2 photos."), model.guide)
+    model.stop()
+  }
   func testARetakeIgnoresAnotherQuestionAndSaysWhichOneToShow() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
     let analyzer = FakePageAnalyzer(sample: frameSample()), voice = FakeScanVoice()
