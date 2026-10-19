@@ -8,6 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		BA7C00000000000000000032 /* ScanVoice.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C00000000000000000031; };
+		BA7C00000000000000000042 /* HandGestures.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C00000000000000000041; };
+		BA7C00000000000000000052 /* PageSolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C00000000000000000051; };
+		BA7C00000000000000000062 /* MWDATInputs in Frameworks */ = {isa = PBXBuildFile; productRef = BA7C00000000000000000061 /* MWDATInputs */; };
 		BA7C00000000000000000022 /* ScanDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C00000000000000000021; };
 		BA7C00000000000000000012 /* BatchSolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C00000000000000000011; };
 		2982D882FF0CB083E037654E /* SolverService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C81611D51712FF60636F7C38; };
@@ -81,6 +84,8 @@
 
 /* Begin PBXFileReference section */
 		BA7C00000000000000000031 /* ScanVoice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/ScanVoice.swift; sourceTree = "<group>"; };
+		BA7C00000000000000000041 /* HandGestures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/HandGestures.swift; sourceTree = "<group>"; };
+		BA7C00000000000000000051 /* PageSolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/PageSolver.swift; sourceTree = "<group>"; };
 		BA7C00000000000000000021 /* ScanDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/ScanDraft.swift; sourceTree = "<group>"; };
 		BA7C00000000000000000011 /* BatchSolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/BatchSolver.swift; sourceTree = "<group>"; };
 		C81611D51712FF60636F7C38 /* SolverService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/SolverService.swift; sourceTree = "<group>"; };
@@ -136,6 +141,7 @@
 				8FD96B952E6F0F7D00F56AB1 /* MWDATCore in Frameworks */,
 				8FD96B952E6F0F7D00F56AB2 /* MWDATCamera in Frameworks */,
 				8FD96B952E6F0F7D00F56AB3 /* MWDATMockDevice in Frameworks */,
+				BA7C00000000000000000062 /* MWDATInputs in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -229,6 +235,8 @@
 				BA7C00000000000000000011 /* BatchSolver.swift */,
 				BA7C00000000000000000021 /* ScanDraft.swift */,
 				BA7C00000000000000000031 /* ScanVoice.swift */,
+				BA7C00000000000000000041 /* HandGestures.swift */,
+				BA7C00000000000000000051 /* PageSolver.swift */,
 				505C167EBC5FA348132A8B77 /* AutoScanModel.swift */,
 				F3C17C4B548B6BF3A1D3025D /* AutoScanView.swift */,
 				99627FE9E0D573A0526D4893 /* ScanQuality.swift */,
@@ -427,6 +435,8 @@
 				BA7C00000000000000000012 /* BatchSolver.swift in Sources */,
 				BA7C00000000000000000022 /* ScanDraft.swift in Sources */,
 				BA7C00000000000000000032 /* ScanVoice.swift in Sources */,
+				BA7C00000000000000000042 /* HandGestures.swift in Sources */,
+				BA7C00000000000000000052 /* PageSolver.swift in Sources */,
 				7A8F8F8849FAFF6694802945 /* AutoScanModel.swift in Sources */,
 				69C00752900F44FD71C9AFD5 /* AutoScanView.swift in Sources */,
 				A0EADB51FEB0A4BBC4CBC386 /* ScanQuality.swift in Sources */,
@@ -497,7 +507,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = CameraAccess/CameraAccess.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
@@ -508,7 +518,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.3.1;
+				MARKETING_VERSION = 2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolver;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;
@@ -524,7 +534,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = CameraAccess/CameraAccess.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
@@ -534,7 +544,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.3.1;
+				MARKETING_VERSION = 2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolver;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;
@@ -548,13 +558,13 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 1.3.1;
+				MARKETING_VERSION = 2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolverUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -574,13 +584,13 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 1.3.1;
+				MARKETING_VERSION = 2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolverUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -600,13 +610,13 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 1.3.1;
+				MARKETING_VERSION = 2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolverTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -629,13 +639,13 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 1.3.1;
+				MARKETING_VERSION = 2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolverTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -833,6 +843,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 95F7F3332DEF0D91006D1C1A /* XCRemoteSwiftPackageReference "meta-wearables-dat-ios" */;
 			productName = MWDATMockDevice;
+		};
+		BA7C00000000000000000061 /* MWDATInputs */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 95F7F3332DEF0D91006D1C1A /* XCRemoteSwiftPackageReference "meta-wearables-dat-ios" */;
+			productName = MWDATInputs;
 		};
 		E66CC01E2F3E1A9300B07380 /* MWDATMockDeviceTestClient */ = {
 			isa = XCSwiftPackageProductDependency;

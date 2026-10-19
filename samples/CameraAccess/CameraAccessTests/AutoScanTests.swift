@@ -119,22 +119,6 @@ final class AutoScanTests: XCTestCase {
     XCTAssertNotNil(result.sample.contentBounds, "Real text detection must supply directions, not only the fallback.")
     XCTAssertEqual(result.sample.cue, .tiltUp)
   }
-  func testHTTPIncompleteRefusalAndInvalidResultDoNotProduceSolutions() throws {
-    XCTAssertThrowsError(try SolverClient.payload(data: Data(), status: 401, provider: .openAI))
-    let incomplete = Data(#"{"status":"incomplete","output":[]}"#.utf8)
-    XCTAssertThrowsError(try SolverClient.payload(data: incomplete, status: 200, provider: .openAI))
-    let refusal = Data(#"{"status":"completed","output":[{"content":[{"type":"refusal","refusal":"no"}]}]}"#.utf8)
-    XCTAssertThrowsError(try SolverClient.payload(data: refusal, status: 200, provider: .openAI))
-    let malformed = Data(#"{"status":"completed","output":[]}"#.utf8)
-    XCTAssertThrowsError(try SolverClient.payload(data: malformed, status: 200, provider: .openAI))
-  }
-  func testStructuredSolutionAndReadabilityAreDecoded() throws {
-    let page = solvedPage()
-    let result = try JSONSerialization.data(withJSONObject: ["status": "completed", "output": [["content": [["type": "output_text", "text": String(decoding: try JSONEncoder().encode(page), as: UTF8.self)]]]]])
-    let decoded = try JSONDecoder().decode(SolvedPage.self, from: SolverClient.payload(data: result, status: 200, provider: .openAI))
-    XCTAssertTrue(decoded.readable)
-    XCTAssertEqual(decoded.problems.first?.answer, "x = 4")
-  }
   func testClearPagePassesAndBlurAndBlankFail() async throws {
     let analyzer = PageAnalyzer()
     let clear = paperImage()
@@ -167,13 +151,14 @@ final class AutoScanTests: XCTestCase {
   func testHandsFreeCaptureAutomaticallySolvesAndPresentsExactlyOnePDF() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.95)!)
     let analyzer = FakePageAnalyzer(sample: goodSample())
-    let solver = FakePageSolver(page: solvedPage())
+    let solver = FakePageSolver()
     let saver = FakeSolutionSaver()
     let model = makeModel(camera, analyzer, solver, saver)
     model.start()
     await waitUntil { model.phase == .seeking }
     try await sendStableFrames(camera, model: model)
     await waitUntil { model.phase == .awaitingNext }
+    XCTAssertEqual(camera.shutters, 1, "The wearer is released at the shutter, before the still is checked.")
     model.finishScanning()
     await waitUntil { model.phase == .finished }
     XCTAssertEqual(model.phase, .finished, model.guide)
@@ -182,6 +167,7 @@ final class AutoScanTests: XCTestCase {
     XCTAssertEqual(saver.saves, 1)
     let count = await solver.calls
     XCTAssertEqual(count, 1)
+    XCTAssertTrue(model.pages.isEmpty, "A saved PDF holds the originals; the next Start begins a new packet.")
     for _ in 0..<20 { camera.onFrame?(paperImage().cgImage!) }
     XCTAssertEqual(camera.captures, 1)
     model.stop()
@@ -189,7 +175,7 @@ final class AutoScanTests: XCTestCase {
   func testNoDetectedTextOutlineStillCompletesHandsFree() async throws {
     let camera = FakeScanCamera(data: problemImage().jpegData(compressionQuality: 0.95)!)
     var sample = goodSample(); sample.contentBounds = nil; sample.cue = .findProblem
-    let solver = FakePageSolver(page: solvedPage()), saver = FakeSolutionSaver()
+    let solver = FakePageSolver(), saver = FakeSolutionSaver()
     let model = makeModel(camera, FakePageAnalyzer(sample: sample), solver, saver)
     model.start(); await waitUntil { model.phase == .seeking }
     try await sendStableFrames(camera, model: model, count: 12)
@@ -203,7 +189,7 @@ final class AutoScanTests: XCTestCase {
   func testBadStillIsRetakenWithoutSendingToAI() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
     let analyzer = FakePageAnalyzer(sample: goodSample(), rejectFirstStill: true)
-    let solver = FakePageSolver(page: solvedPage())
+    let solver = FakePageSolver()
     let saver = FakeSolutionSaver()
     let model = makeModel(camera, analyzer, solver, saver)
     model.start(); await waitUntil { model.phase == .seeking }
@@ -221,19 +207,19 @@ final class AutoScanTests: XCTestCase {
   }
   func testUnreadableBatchKeepsAllPhotosWithoutPartialPDF() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
-    let page = SolvedPage(readable: false, retakeReason: "Page 1: exponent unclear.", title: "", problems: [])
-    let solver = FakePageSolver(page: page), saver = FakeSolutionSaver()
+    let solver = FakePageSolver(failure: AIResultError.unreadable("Page 1: exponent unclear.")), saver = FakeSolutionSaver()
     let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), solver, saver)
     model.importPhoto(camera.data); await waitUntil { model.pages.count == 1 }
     model.finishScanning(); await waitUntil { model.phase == .failed }
     let calls = await solver.calls
     XCTAssertEqual(calls, 1); XCTAssertEqual(model.pages.count, 1)
     XCTAssertEqual(saver.saves, 0); XCTAssertFalse(model.showPDF)
+    XCTAssertTrue(model.guide.contains("exponent unclear"), model.guide)
     model.stop()
   }
   func testGlassesDisconnectAfterPhotoDoesNotDiscardSolution() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
-    let solver = FakePageSolver(page: solvedPage(), delay: true)
+    let solver = FakePageSolver(delay: true)
     let saver = FakeSolutionSaver()
     let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), solver, saver)
     model.importPhoto(camera.data)
@@ -248,7 +234,7 @@ final class AutoScanTests: XCTestCase {
   }
   func testCancelIgnoresLateAIResponse() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
-    let solver = FakePageSolver(page: solvedPage(), delay: true)
+    let solver = FakePageSolver(delay: true)
     let saver = FakeSolutionSaver()
     let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), solver, saver)
     model.importPhoto(camera.data)
@@ -296,9 +282,43 @@ final class AutoScanTests: XCTestCase {
       throw error
     }
   }
+  func testGlassesButtonsReachTheScanWithMockGlasses() async throws {
+    try? Wearables.configure()
+    MockDeviceKit.shared.enable()
+    let glasses = try MockDeviceKit.shared.pairGlasses(model: .rayBanMeta)
+    glasses.powerOn(); glasses.unfold(); glasses.don()
+    await waitUntil { Wearables.shared.devices.contains(glasses.deviceIdentifier) }
+    MockDeviceKit.shared.permissions.set(.camera, .granted)
+    MockDeviceKit.shared.permissions.setRequestResult(.camera, result: .granted)
+    let camera = AutoScanCamera(wearables: Wearables.shared)
+    var commands: [ScanCommand] = []
+    var notices: [String] = []
+    camera.onCommand = { commands.append($0) }
+    camera.onNotice = { notices.append($0) }
+    let video = try XCTUnwrap(Bundle.main.url(forResource: "plant", withExtension: "mp4"))
+    glasses.services.camera.setCameraFeed(fileURL: video)
+    do {
+      try await camera.start()
+      await waitUntil(timeout: 25) { camera.inputsActive }
+      XCTAssertTrue(camera.inputsActive, "Glasses buttons never activated. Notices: \(notices)")
+      glasses.services.input.select()
+      await waitUntil { commands.count == 1 }
+      glasses.services.input.capture(pressType: .shortPress)
+      await waitUntil { commands.count == 2 }
+      glasses.services.input.capture(pressType: .hold)
+      await waitUntil { commands.count == 3 }
+      XCTAssertEqual(commands, [.finish, .next, .retakeLast])
+      camera.stop()
+      await MockDeviceKit.shared.disable()
+    } catch {
+      camera.stop()
+      await MockDeviceKit.shared.disable()
+      throw error
+    }
+  }
   func testMissingKeyAllowsCollectionButDoesNotUpload() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
-    let solver = FakePageSolver(page: solvedPage())
+    let solver = FakePageSolver()
     let model = AutoScanModel(camera: camera, analyzer: FakePageAnalyzer(sample: goodSample()), solver: solver,
       draft: temporaryDraft(), voice: FakeScanVoice(), configurationProvider: { SolverConfiguration() })
     model.voiceGuidance = false; model.importPhoto(camera.data)
@@ -412,7 +432,8 @@ final class AutoScanTests: XCTestCase {
     var ready: CheckedContinuation<Void, Never>?
     voice.startHook = { await withCheckedContinuation { ready = $0 } }
     let model = AutoScanModel(camera: camera, analyzer: FakePageAnalyzer(sample: goodSample()),
-      solver: FakePageSolver(page: solvedPage()), saver: FakeSolutionSaver(), draft: temporaryDraft(), voice: voice)
+      solver: FakePageSolver(), saver: FakeSolutionSaver(), draft: temporaryDraft(), voice: voice)
+    model.voiceCommands = true
     model.start(); await waitUntil { ready != nil }
     XCTAssertEqual(model.phase, .connecting); XCTAssertEqual(camera.starts, 0)
     XCTAssertTrue(voice.messages.isEmpty)
@@ -425,31 +446,130 @@ final class AutoScanTests: XCTestCase {
     var ready: CheckedContinuation<Void, Never>?
     voice.startHook = { await withCheckedContinuation { ready = $0 } }
     let model = AutoScanModel(camera: camera, analyzer: FakePageAnalyzer(sample: goodSample()),
-      solver: FakePageSolver(page: solvedPage()), saver: FakeSolutionSaver(), draft: temporaryDraft(), voice: voice)
+      solver: FakePageSolver(), saver: FakeSolutionSaver(), draft: temporaryDraft(), voice: voice)
+    model.voiceCommands = true
     model.start(); await waitUntil { ready != nil }
     model.stop(); ready?.resume()
     await waitUntil { voice.startReturned }
     XCTAssertEqual(model.phase, .idle); XCTAssertEqual(camera.starts, 0)
     XCTAssertTrue(voice.messages.isEmpty)
   }
-  func testTwoPagesWaitForFinishAndDuplicateFramesDoNotUpload() async throws {
+  func testPagesSolveWhileScanningWithNeighborsAndStationaryFramesDoNotRecapture() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
-    let solver = FakePageSolver(page: solvedPage()), saver = FakeSolutionSaver()
+    let solver = FakePageSolver(), saver = FakeSolutionSaver()
     let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), solver, saver)
     model.start(); await waitUntil { model.phase == .seeking }
     try await sendStableFrames(camera, model: model)
     await waitUntil { model.phase == .awaitingNext }
     for _ in 0..<12 { camera.onFrame?(paperImage().cgImage!) }
     var calls = await solver.calls
-    XCTAssertEqual(calls, 0); XCTAssertEqual(model.pages.count, 1); XCTAssertEqual(camera.captures, 1)
+    XCTAssertEqual(calls, 0, "The newest page waits for the next page as context.")
+    XCTAssertEqual(model.pages.count, 1); XCTAssertEqual(camera.captures, 1)
     model.handle(.next)
     try await sendStableFrames(camera, model: model)
     await waitUntil { model.pages.count == 2 && model.phase == .awaitingNext }
-    calls = await solver.calls; XCTAssertEqual(calls, 0)
+    await waitUntil { model.pageStates[model.pages[0].id] == .solved }
+    calls = await solver.calls
+    XCTAssertEqual(calls, 1, "Page 1 is solved during scanning, once page 2 exists.")
+    let first = await solver.jobs.first
+    XCTAssertEqual(first?.number, 1); XCTAssertNotNil(first?.next); XCTAssertNil(first?.previous)
+    XCTAssertEqual(model.pageStates[model.pages[1].id], .waiting)
     model.handle(.finish); await waitUntil { model.phase == .finished }
     calls = await solver.calls
-    XCTAssertEqual(calls, 1); XCTAssertEqual(saver.saves, 1); XCTAssertEqual(saver.sourceCount, 2)
+    XCTAssertEqual(calls, 2, "Finish solves only the last page.")
+    let last = await solver.jobs.last
+    XCTAssertEqual(last?.number, 2); XCTAssertNotNil(last?.previous); XCTAssertNil(last?.next)
+    XCTAssertEqual(saver.saves, 1); XCTAssertEqual(saver.sourceCount, 2)
+    XCTAssertEqual(saver.lastPage?.problems.map(\.label), ["1(a) p1", "1(a) p2"])
     XCTAssertTrue(model.showPDF); model.stop()
+  }
+  func testSolveAtFinishWhenSolvingWhileScanningIsOff() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let solver = FakePageSolver(), saver = FakeSolutionSaver()
+    let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), solver, saver)
+    model.solveWhileScanning = false
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await sendStableFrames(camera, model: model)
+    await waitUntil { model.phase == .awaitingNext }
+    model.handle(.next)
+    try await sendStableFrames(camera, model: model)
+    await waitUntil { model.pages.count == 2 && model.phase == .awaitingNext }
+    try await Task.sleep(for: .milliseconds(300))
+    var calls = await solver.calls
+    XCTAssertEqual(calls, 0, "Nothing is uploaded before Finish when the option is off.")
+    model.finishScanning(); await waitUntil { model.phase == .finished }
+    calls = await solver.calls
+    XCTAssertEqual(calls, 2); XCTAssertEqual(saver.saves, 1); model.stop()
+  }
+  func testThumbsUpGestureFinishesAndSolvesWithoutTouchingThePhone() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: goodSample()), solver = FakePageSolver(), saver = FakeSolutionSaver()
+    let model = makeModel(camera, analyzer, solver, saver)
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await sendStableFrames(camera, model: model)
+    await waitUntil { model.phase == .awaitingNext }
+    await analyzer.setGesture(.thumbsUp)
+    for _ in 0..<8 {
+      guard model.phase == .awaitingNext else { break }
+      camera.onFrame?(paperImage().cgImage!)
+      try await Task.sleep(for: .milliseconds(350))
+    }
+    await waitUntil { model.phase == .finished }
+    XCTAssertEqual(model.phase, .finished, model.guide)
+    XCTAssertEqual(camera.captures, 1, "A raised command hand must never be photographed.")
+    XCTAssertEqual(saver.saves, 1); model.stop()
+  }
+  func testThumbsUpBeforeAnyPageDoesNotFinish() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    var sample = goodSample(); sample.gesture = .thumbsUp
+    let solver = FakePageSolver(), saver = FakeSolutionSaver()
+    let model = makeModel(camera, FakePageAnalyzer(sample: sample), solver, saver)
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await sendStableFrames(camera, model: model, count: 10)
+    XCTAssertEqual(model.phase, .seeking); XCTAssertEqual(camera.captures, 0)
+    let calls = await solver.calls; XCTAssertEqual(calls, 0); model.stop()
+  }
+  func testGlassesClicksFinishAndRetake() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let solver = FakePageSolver(), saver = FakeSolutionSaver()
+    let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), solver, saver)
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await sendStableFrames(camera, model: model)
+    await waitUntil { model.phase == .awaitingNext }
+    let firstID = model.pages[0].id
+    camera.onCommand?(.retakeLast)
+    XCTAssertEqual(model.phase, .seeking)
+    try await sendStableFrames(camera, model: model)
+    await waitUntil { model.phase == .awaitingNext && model.pages.first?.id != firstID }
+    XCTAssertEqual(model.pages.count, 1, "A retake replaces the page instead of adding one.")
+    camera.onCommand?(.finish)
+    await waitUntil { model.phase == .finished }
+    XCTAssertEqual(saver.saves, 1); XCTAssertEqual(camera.captures, 2); model.stop()
+  }
+  func testFailedPageIsRetriedAloneAndSolvedPagesAreKept() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let solver = FakePageSolver(failFirstAttemptOfPage: 1), saver = FakeSolutionSaver()
+    let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), solver, saver)
+    model.importPhoto(camera.data); await waitUntil { model.pages.count == 1 && model.phase == .idle }
+    model.importPhoto(camera.data); await waitUntil { model.pages.count == 2 && model.phase == .idle }
+    model.finishScanning(); await waitUntil { model.phase == .failed }
+    XCTAssertTrue(model.guide.contains("Solved pages are kept"), model.guide)
+    XCTAssertEqual(model.pageStates[model.pages[1].id], .solved)
+    var calls = await solver.calls; XCTAssertEqual(calls, 2)
+    model.finishScanning(); await waitUntil { model.phase == .finished }
+    calls = await solver.calls
+    XCTAssertEqual(calls, 3, "Only the failed page is solved again.")
+    XCTAssertEqual(saver.saves, 1); model.stop()
+  }
+  func testSwitchingTabsDuringSolvingDoesNotCancelIt() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let solver = FakePageSolver(delay: true), saver = FakeSolutionSaver()
+    let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), solver, saver)
+    model.importPhoto(camera.data); await waitUntil { model.pages.count == 1 && model.phase == .idle }
+    model.finishScanning(); await waitUntil { model.phase == .solving }
+    model.viewDisappeared(); model.backgrounded()
+    await waitUntil { model.phase == .finished }
+    XCTAssertEqual(saver.saves, 1); model.stop()
   }
   func testDraftRestoresInOrderAndRetakeReplacesOnlyOnePage() throws {
     let store = temporaryDraft(), bytes = paperImage().jpegData(compressionQuality: 0.9)!
@@ -462,82 +582,6 @@ final class AutoScanTests: XCTestCase {
     XCTAssertEqual(restored.map(\.id), pages.map(\.id)); XCTAssertEqual(restored[0].id, first)
     XCTAssertFalse(FileManager.default.fileExists(atPath: oldSecond.path))
     XCTAssertEqual(try Data(contentsOf: restored[1].url), bytes)
-  }
-  func testProviderRequestsUseSeparateCredentialsAndCorrectImageFormats() throws {
-    let photo = AIPhoto(number: 2, jpeg: Data([1, 2, 3]))
-    for provider in AIProvider.allCases {
-      let credential = AICredential(provider: provider, key: provider == .claude ? "claude-secret-fixture" : "openai-secret-fixture", model: "test-model")
-      let request = try SolverClient.request(AIRequest(credential: credential, photos: [photo], prompt: "Solve", shape: .answers, tokenLimit: 16000))
-      let data = try XCTUnwrap(request.httpBody), body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-      let text = String(decoding: data, as: UTF8.self)
-      XCTAssertFalse(text.contains("secret-fixture"))
-      if provider == .claude {
-        XCTAssertEqual(request.url?.host, "api.anthropic.com")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "x-api-key"), credential.key)
-        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
-        XCTAssertEqual(request.value(forHTTPHeaderField: "anthropic-version"), "2023-06-01")
-        XCTAssertNotNil(body["output_config"]); XCTAssertTrue(text.contains("media_type"))
-      } else {
-        XCTAssertEqual(request.url?.host, "api.openai.com")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer " + credential.key)
-        XCTAssertNil(request.value(forHTTPHeaderField: "x-api-key"))
-        XCTAssertEqual(body["store"] as? Bool, false); XCTAssertNotNil(body["text"])
-        XCTAssertTrue(text.contains("input_image"))
-      }
-    }
-  }
-  func testClaudeEnvelopeRejectsTruncationRefusalAndEmptyText() throws {
-    let result = Data(#"{"stop_reason":"end_turn","content":[{"type":"thinking","thinking":"not a solution"},{"type":"text","text":"{\"answers\":[]}"}]}"#.utf8)
-    XCTAssertEqual(String(decoding: try SolverClient.payload(data: result, status: 200, provider: .claude), as: UTF8.self), #"{"answers":[]}"#)
-    for reason in ["max_tokens", "refusal"] {
-      let data = try JSONSerialization.data(withJSONObject: ["stop_reason": reason, "content": []])
-      XCTAssertThrowsError(try SolverClient.payload(data: data, status: 200, provider: .claude))
-    }
-    XCTAssertThrowsError(try SolverClient.payload(data: Data(#"{"stop_reason":"end_turn","content":[]}"#.utf8), status: 200, provider: .claude))
-  }
-  func testInventoryRejectsOmittedPagesAndAnswerCoverageRejectsMissingParts() throws {
-    let item = InventoriedQuestion(id: "q1", label: "1(a)", sourcePages: [1], problem: "Solve x")
-    let inventory = QuestionInventory(title: "Test", pages: [PageReading(page: 1, readable: true, issue: "")], questions: [item])
-    XCTAssertThrowsError(try inventory.validate(pageCount: 2))
-    let answer = WorkedAnswer(id: "q1", steps: ["Work"], answer: "1", check: "Checked", status: "solved", reviewNote: "")
-    XCTAssertThrowsError(try AnswerSet(answers: [answer]).validate(ids: ["q1", "q2"]))
-    XCTAssertThrowsError(try AnswerSet(answers: [answer, answer]).validate(ids: ["q1", "q2"]))
-    let empty = WorkedAnswer(id: "q1", steps: [" "], answer: " ", check: " ", status: "solved", reviewNote: "")
-    XCTAssertThrowsError(try AnswerSet(answers: [empty]).validate(ids: ["q1"]))
-  }
-  func testBothProvidersAuditSolveReconcileAndRepairOneMissingAnswer() async throws {
-    let transport = FixtureAITransport(behavior: .missingOnce)
-    let solver = BatchSolver(transport: transport), photo = paperImage().jpegData(compressionQuality: 0.9)!
-    let config = SolverConfiguration(mode: .both, openAIKey: "fixture-openai", claudeKey: "fixture-claude")
-    let result = try await solver.solve(pages: [photo, photo], configuration: config, progress: { _ in })
-    XCTAssertEqual(result.problems.count, 2)
-    XCTAssertEqual(result.problems.last?.label, "1(b)")
-    let requests = await transport.requests
-    XCTAssertEqual(requests.count, 6, "Two inventories, two independent drafts, one repair, one reconciliation")
-    XCTAssertTrue(requests.contains { $0.prompt.contains("Untrusted Claude draft:") })
-    XCTAssertTrue(requests.contains { $0.prompt.contains("REPAIR REQUIRED:") })
-    XCTAssertTrue(requests.allSatisfy { $0.photos.count == 2 })
-  }
-  func testIncompleteResultsHaveOneRepairAndNetworkErrorsHaveNone() async throws {
-    let photo = paperImage().jpegData(compressionQuality: 0.9)!
-    for behavior in [FixtureAITransport.Behavior.emptyAlways, .networkFailure] {
-      let transport = FixtureAITransport(behavior: behavior)
-      do {
-        _ = try await BatchSolver(transport: transport).solve(pages: [photo], configuration: SolverConfiguration(openAIKey: "fixture"), progress: { _ in })
-        XCTFail("An incomplete/error result must not become a solution")
-      } catch {}
-      let requests = await transport.requests
-      XCTAssertEqual(requests.count, behavior == .emptyAlways ? 3 : 1)
-    }
-  }
-  func testClaudeOnlyDoesNotUseOpenAIKey() async throws {
-    let transport = FixtureAITransport(behavior: .valid)
-    let result = try await BatchSolver(transport: transport).solve(pages: [paperImage().jpegData(compressionQuality: 0.9)!],
-      configuration: SolverConfiguration(mode: .claude, openAIKey: "must-not-send", claudeKey: "claude-only"), progress: { _ in })
-    XCTAssertEqual(result.problems.count, 2)
-    let requests = await transport.requests
-    XCTAssertEqual(requests.count, 3)
-    XCTAssertTrue(requests.allSatisfy { $0.credential.provider == .claude && $0.credential.key == "claude-only" })
   }
   func testCombinedPDFIncludesCoverageAllPartsAndAllSourcePhotos() throws {
     var page = solvedPage(); page.coverage = "2 pages. All 2 subparts included."
@@ -621,42 +665,62 @@ private final class FakeScanCamera: ScanCamera {
   var onProblem: ((String) -> Void)?
   var onProgress: ((Double) -> Void)?
   var onNotice: ((String) -> Void)?
+  var onShutter: (() -> Void)?
+  var onCommand: ((ScanCommand) -> Void)?
+  var glassesButtons = true
   let data: Data
-  var captures = 0, resumes = 0, starts = 0
+  var captures = 0, resumes = 0, starts = 0, shutters = 0
   init(data: Data) { self.data = data }
   func start() async throws { starts += 1 }
   func resumePreview() async throws { resumes += 1 }
-  func capture() async throws -> Data { captures += 1; return data }
+  func capture() async throws -> Data { captures += 1; shutters += 1; onShutter?(); return data }
   func stop() {}
 }
 private actor FakePageAnalyzer: PageAnalyzing {
-  let sample: PageSample
+  var sample: PageSample
   var rejectFirstStill: Bool
   init(sample: PageSample, rejectFirstStill: Bool = false) { self.sample = sample; self.rejectFirstStill = rejectFirstStill }
+  func setGesture(_ gesture: HandGesture?) { sample.gesture = gesture }
   func analyze(_ image: CGImage, still: Bool) async throws -> PageSample { sample }
   func prepare(_ data: Data) async throws -> PreparedPhoto {
-    var value = sample
+    var value = sample; value.gesture = nil
     if rejectFirstStill { value.issue = "Hold still; blurry photo."; rejectFirstStill = false }
     return PreparedPhoto(jpeg: data, sample: value, width: 1200, height: 1600)
   }
 }
-private actor FakePageSolver: BatchSolving {
-  let page: SolvedPage
+/// Returns one solved item per page, labeled with its page number, after optional failures/delays.
+private actor FakePageSolver: PageSolving {
   let delay: Bool
+  let failure: (any Error)?
+  let failFirstAttemptOfPage: Int?
   private(set) var calls = 0
-  init(page: SolvedPage, delay: Bool = false) { self.page = page; self.delay = delay }
-  func solve(pages: [Data], configuration: SolverConfiguration, progress: @escaping @Sendable (String) -> Void) async throws -> SolvedPage {
-    calls += 1
-    if delay { try? await Task.sleep(for: .milliseconds(500)) }
-    return page
+  private(set) var jobs: [PageJob] = []
+  private var failedOnce = false
+  init(delay: Bool = false, failure: (any Error)? = nil, failFirstAttemptOfPage: Int? = nil) {
+    self.delay = delay; self.failure = failure; self.failFirstAttemptOfPage = failFirstAttemptOfPage
   }
+  func solve(_ job: PageJob, configuration: SolverConfiguration,
+             progress: @escaping @Sendable (String) -> Void) async throws -> PageResult {
+    calls += 1; jobs.append(job)
+    if delay { try? await Task.sleep(for: .milliseconds(500)) }
+    if let failure { throw failure }
+    if job.number == failFirstAttemptOfPage && !failedOnce {
+      failedOnce = true; throw SolverError.message("Page \(job.number): service unavailable.")
+    }
+    let item = PageSolutionItem(label: "1(a) p\(job.number)", problem: "2x + 3 = 11 on page \(job.number)",
+      steps: ["Subtract 3.", "Divide by 2."], answer: "x = 4", check: "2 × 4 + 3 = 11", status: "solved",
+      reviewNote: "", sourcePages: [job.number])
+    return PageResult(readable: true, retake: "", title: "Linear equation", checklist: [item.label], solutions: [item], skipped: [])
+  }
+  func forget(keeping urls: Set<URL>) {}
 }
 @MainActor
 private final class FakeSolutionSaver: SolutionSaving {
   var saves = 0
   var sourceCount = 0
-  func save(page: SolvedPage, jpegs: [Data]) throws -> SavedSolution {
-    saves += 1; sourceCount = jpegs.count
+  var lastPage: SolvedPage?
+  func save(page: SolvedPage, sources: [URL]) async throws -> SavedSolution {
+    saves += 1; sourceCount = sources.count; lastPage = page
     return SavedSolution(id: UUID(), title: page.title, date: Date(), pdf: URL(fileURLWithPath: "/tmp/test.pdf"), source: URL(fileURLWithPath: "/tmp/test.jpg"))
   }
 }
@@ -665,37 +729,13 @@ private final class FakeSolutionSaver: SolutionSaving {
 private final class FakeScanVoice: ScanSpeaking {
   var onCommand: ((ScanCommand) -> Void)?
   var onStatus: ((String) -> Void)?
+  var privateOnly = true
   var startHook: (() async -> Void)?
   var startReturned = false
   var messages: [String] = []
+  func prepareOutput() {}
   func startCommands() async { await startHook?(); startReturned = true }
   func stopCommands() {}
   func say(_ message: String, volume: Float) { messages.append(message) }
   func stopSpeaking() {}
-}
-
-private actor FixtureAITransport: AITransport {
-  enum Behavior: Sendable { case valid, missingOnce, emptyAlways, networkFailure }
-  let behavior: Behavior
-  private(set) var requests: [AIRequest] = []
-  private var missed = false
-  init(behavior: Behavior) { self.behavior = behavior }
-  func send(_ input: AIRequest) async throws -> Data {
-    requests.append(input)
-    if behavior == .networkFailure { throw URLError(.timedOut) }
-    if case .inventory = input.shape {
-      let inventory = QuestionInventory(title: "Fixture packet", pages: input.photos.map { PageReading(page: $0.number, readable: true, issue: "") }, questions: [
-        InventoriedQuestion(id: "q1", label: "1(a)", sourcePages: [1], problem: "Solve 2x = 8"),
-        InventoriedQuestion(id: "q2", label: "1(b)", sourcePages: [input.photos.count], problem: "Solve 3y = 9")])
-      return try JSONEncoder().encode(inventory)
-    }
-    if behavior == .emptyAlways { return Data(#"{"answers":[]}"#.utf8) }
-    var answers = [
-      WorkedAnswer(id: "q1", steps: ["Divide by 2"], answer: "x = 4", check: "2 × 4 = 8", status: "solved", reviewNote: ""),
-      WorkedAnswer(id: "q2", steps: ["Divide by 3"], answer: "y = 3", check: "3 × 3 = 9", status: "solved", reviewNote: "")]
-    if behavior == .missingOnce && !missed && input.credential.provider == .openAI {
-      answers.removeLast(); missed = true
-    }
-    return try JSONEncoder().encode(AnswerSet(answers: answers))
-  }
 }

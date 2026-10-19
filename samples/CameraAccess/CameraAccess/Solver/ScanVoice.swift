@@ -17,6 +17,10 @@ enum ScanCommand: Equatable {
 protocol ScanSpeaking: AnyObject {
   var onCommand: ((ScanCommand) -> Void)? { get set }
   var onStatus: ((String) -> Void)? { get set }
+  /// Speak only through glasses/headphones, never the phone loudspeaker.
+  var privateOnly: Bool { get set }
+  /// Output-only audio session for cues when the microphone is not in use.
+  func prepareOutput()
   func startCommands() async
   func stopCommands()
   func say(_ message: String, volume: Float)
@@ -43,6 +47,7 @@ final class ScanVoice: NSObject, ScanSpeaking, AVSpeechSynthesizerDelegate {
   static let quietVolume: Float = 0.05
   var onCommand: ((ScanCommand) -> Void)?
   var onStatus: ((String) -> Void)?
+  var privateOnly = true
   private let speech = AVSpeechSynthesizer()
   private var engine: AVAudioEngine?
   private var tappedInput: AVAudioInputNode?
@@ -195,7 +200,20 @@ final class ScanVoice: NSObject, ScanSpeaking, AVSpeechSynthesizerDelegate {
       self?.startRecognition()
     }
   }
+  /// `.playback` is not silenced by the Ring/Silent switch, and mixing leaves the wearer's audio playing.
+  func prepareOutput() {
+    guard !active else { return } // listening uses .playAndRecord
+    let session = AVAudioSession.sharedInstance()
+    try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+    try? session.setActive(true)
+  }
+  static var privateRoute: Bool {
+    AVAudioSession.sharedInstance().currentRoute.outputs.contains {
+      [.bluetoothA2DP, .bluetoothHFP, .bluetoothLE, .headphones].contains($0.portType)
+    }
+  }
   func say(_ message: String, volume: Float) {
+    guard !privateOnly || Self.privateRoute else { return }
     unmute?.cancel(); feed.mute(true); speechGeneration = UUID()
     speech.stopSpeaking(at: .immediate)
     let utterance = AVSpeechUtterance(string: message)

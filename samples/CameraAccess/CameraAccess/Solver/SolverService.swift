@@ -32,7 +32,7 @@ struct SavedSolution: Identifiable {
 
 @MainActor
 protocol SolutionSaving {
-  func save(page: SolvedPage, jpegs: [Data]) throws -> SavedSolution
+  func save(page: SolvedPage, sources: [URL]) async throws -> SavedSolution
 }
 
 @MainActor
@@ -40,25 +40,31 @@ struct SolutionStore: SolutionSaving {
   static var directory: URL {
     FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Solutions", isDirectory: true)
   }
-  func save(page: SolvedPage, jpegs: [Data]) throws -> SavedSolution {
+  func save(page: SolvedPage, sources: [URL]) async throws -> SavedSolution {
     let id = UUID(), date = Date()
     let folder = Self.directory.appendingPathComponent(id.uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     let pdf = folder.appendingPathComponent("Solution.pdf"), source = folder.appendingPathComponent("Paper.jpg")
     do {
-      guard !jpegs.isEmpty else { throw SolverError.message("No source photos were saved.") }
-      let images = try jpegs.map { bytes -> UIImage in
-        guard let source = CGImageSourceCreateWithData(bytes as CFData, nil),
-          let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: 1600] as CFDictionary)
-          else { throw SolverError.message("A source photo is unreadable.") }
-        return UIImage(cgImage: image)
+      guard !sources.isEmpty else { throw SolverError.message("No source photos were saved.") }
+      // Decoding full-size photos is the slow part: do it off the main actor, all pages concurrently.
+      let previews = try await withThrowingTaskGroup(of: (Int, Data).self) { group in
+        for (index, url) in sources.enumerated() {
+          group.addTask { (index, try SolutionPDF.previewJPEG(try Data(contentsOf: url))) }
+        }
+        var ordered = [Data?](repeating: nil, count: sources.count)
+        for try await (index, data) in group { ordered[index] = data }
+        return ordered.compactMap { $0 }
+      }
+      let images = try previews.map { data -> UIImage in
+        guard let image = UIImage(data: data) else { throw SolverError.message("A source photo is unreadable.") }
+        return image
       }
       let data = try SolutionPDF.render(page: page, sources: images)
       try data.write(to: pdf, options: .atomic)
-      for (index, jpeg) in jpegs.enumerated() {
+      for (index, original) in sources.enumerated() {
         let path = index == 0 ? source : folder.appendingPathComponent("Paper-\(index + 1).jpg")
-        try jpeg.write(to: path, options: .atomic)
+        try FileManager.default.copyItem(at: original, to: path)
       }
       try JSONEncoder().encode(page).write(to: folder.appendingPathComponent("Solution.json"), options: .atomic)
       return SavedSolution(id: id, title: page.title, date: date, pdf: pdf, source: source)
@@ -82,6 +88,14 @@ struct SolutionStore: SolutionSaving {
 
 @MainActor
 enum SolutionPDF {
+  /// A small JPEG-backed preview: the PDF embeds compressed data instead of a decoded bitmap.
+  nonisolated static func previewJPEG(_ original: Data) throws -> Data {
+    guard let source = CGImageSourceCreateWithData(original as CFData, nil),
+      let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: 1600] as CFDictionary)
+      else { throw SolverError.message("A source photo is unreadable.") }
+    return try PageAnalyzer.encodeJPEG(image, quality: 0.82)
+  }
   static func render(page: SolvedPage, source: UIImage?) throws -> Data {
     try render(page: page, sources: source.map { [$0] } ?? [])
   }
@@ -134,7 +148,7 @@ enum SolutionPDF {
         ("AI-generated • Check the problem transcription and result.     \(pageNumber)" as NSString)
           .draw(at: CGPoint(x: 44, y: 758), withAttributes: [.font: UIFont.systemFont(ofSize: 9), .foregroundColor: UIColor.darkGray])
       }
-      while offset < body.length && pageNumber < 100 {
+      while offset < body.length && pageNumber < 300 {
         renderer.beginPage(); chrome()
         let context = renderer.cgContext
         context.saveGState(); context.textMatrix = .identity

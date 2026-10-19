@@ -32,11 +32,26 @@ enum SolverKeychain {
     guard status == errSecSuccess else { throw SolverError.message("Could not save API key (\(status)).") }
   }
   static func configuration() -> SolverConfiguration {
+    migrateDefaults()
     let defaults = UserDefaults.standard
-    return SolverConfiguration(mode: SolverMode(rawValue: defaults.string(forKey: "solverMode") ?? "both") ?? .both,
+    return SolverConfiguration(mode: SolverMode(rawValue: defaults.string(forKey: "solverMode") ?? "") ?? defaultMode(),
       openAIKey: read(.openAI), claudeKey: read(.claude),
-      openAIModel: defaults.string(forKey: "solverModel") ?? "gpt-5.4",
-      claudeModel: defaults.string(forKey: "claudeModel") ?? "claude-sonnet-5-5")
+      openAIModel: defaults.string(forKey: "solverModel") ?? SolverConfiguration.openAIDefault,
+      claudeModel: defaults.string(forKey: "claudeModel") ?? SolverConfiguration.claudeDefault)
+  }
+  /// One provider is fastest: OpenAI when its key exists (the original setup), otherwise Claude.
+  static func defaultMode() -> SolverMode {
+    !read(.openAI).isEmpty ? .openAI : (!read(.claude).isEmpty ? .claude : .openAI)
+  }
+  /// 2.0 moves the old defaults to GPT-6.1 Sol / Claude Opus 5.5 and single-provider solving.
+  /// Custom model IDs are kept; cross-check mode can be chosen again in Settings.
+  static func migrateDefaults() {
+    let defaults = UserDefaults.standard
+    guard defaults.integer(forKey: "settingsVersion") < 2 else { return }
+    if defaults.string(forKey: "solverModel") == "gpt-5.4" { defaults.set(SolverConfiguration.openAIDefault, forKey: "solverModel") }
+    if defaults.string(forKey: "claudeModel") == "claude-sonnet-5-5" { defaults.set(SolverConfiguration.claudeDefault, forKey: "claudeModel") }
+    if defaults.string(forKey: "solverMode") == SolverMode.both.rawValue { defaults.set(defaultMode().rawValue, forKey: "solverMode") }
+    defaults.set(2, forKey: "settingsVersion")
   }
 }
 
@@ -53,47 +68,62 @@ struct SolverSettingsView: View {
   @State private var model = SolverKeychain.configuration().openAIModel
   @State private var claudeModel = SolverKeychain.configuration().claudeModel
   @AppStorage("cueVolume") private var volume = Double(ScanVoice.quietVolume)
-  @AppStorage("voiceCommands") private var commands = true
+  @AppStorage("voiceGuidance") private var guidance = true
+  @AppStorage("privateAudio") private var privateAudio = true
+  @AppStorage("voiceCommands") private var commands = false
+  @AppStorage("handGestures") private var gestures = true
+  @AppStorage("glassesButtons") private var glassesButtons = true
+  @AppStorage("solveWhileScanning") private var solveWhileScanning = true
   @State private var error: String?
   var body: some View {
     NavigationStack {
       Form {
         Section("Solve with") {
-          Picker("AI providers", selection: $mode) {
+          Picker("AI provider", selection: $mode) {
             ForEach(SolverMode.allCases) { Text($0.name).tag($0) }
           }
           Text(mode == .both
-            ? "Both APIs receive your saved photos. Claude checks the question checklist; both solve independently, then OpenAI compares and reconciles their answers. Draft answers are shared between the services."
-            : "The selected API inventories the packet, solves each group, then reviews its answers against your photos.").font(.footnote)
+            ? "Both APIs solve every page independently, then OpenAI reconciles the two answers against your photo. More careful, but each page takes an extra round and costs more."
+            : "Fastest: one request per page. Each answer includes worked steps and its own check.").font(.footnote)
+          Toggle("Solve pages while scanning", isOn: $solveWhileScanning)
+          Text(solveWhileScanning
+            ? "Each page is uploaded and solved as soon as the next page is saved, so the PDF is ready moments after you finish."
+            : "Nothing is uploaded until you finish; then all pages are solved at once.").font(.footnote)
         }
         if mode != .claude {
           Section("OpenAI") {
             SecureField("OpenAI API key", text: $key).textInputAutocapitalization(.never).autocorrectionDisabled()
             TextField("OpenAI vision model", text: $model).textInputAutocapitalization(.never).autocorrectionDisabled()
-            Button("Use GPT-5.4") { model = "gpt-5.4" }
-            Button("Use GPT-4.1") { model = "gpt-4.1" }
+            Button("Use GPT-6.1 Sol") { model = SolverConfiguration.openAIDefault }
           }
         }
         if mode != .openAI {
           Section("Claude") {
             SecureField("Anthropic API key", text: $claudeKey).textInputAutocapitalization(.never).autocorrectionDisabled()
             TextField("Claude vision model", text: $claudeModel).textInputAutocapitalization(.never).autocorrectionDisabled()
-            Button("Use Claude Sonnet 5.5") { claudeModel = "claude-sonnet-5-5" }
-            Button("Use Claude Opus 5.5") { claudeModel = "claude-opus-5-5" }
+            Button("Use Claude Opus 5.5") { claudeModel = SolverConfiguration.claudeDefault }
+            Button("Use Claude Sonnet 5.5 · faster") { claudeModel = "claude-sonnet-5-5" }
           }
         }
-        Section("Voice") {
-          Toggle("Hands-free voice commands", isOn: $commands)
-          Text("Commands use on-device English speech recognition and need microphone permission. If unavailable, use Finish scanning on screen.").font(.footnote)
-          LabeledContent("Cue volume", value: "\(Int((volume * 100).rounded()))%")
+        Section("Silent controls") {
+          Toggle("Hand gestures", isOn: $gestures)
+          Text("Thumbs-up held about one second in front of the glasses finishes and solves; thumbs-down retakes the last page. Detection runs on the iPhone.").font(.footnote)
+          Toggle("Glasses buttons (beta)", isOn: $glassesButtons)
+          Text("Double-tap the touchpad or double-press the capture button to finish. Press the capture button for the next page now; hold it to retake. Uses Meta's experimental Inputs; if your glasses or Meta AI version don't allow it, the app says so and gestures still work.").font(.footnote)
+          Toggle("Voice commands", isOn: $commands)
+          Text("Off by default. Turning this on uses the microphone and on-device speech recognition.").font(.footnote)
+        }
+        Section("Spoken directions") {
+          Toggle("Speak directions and progress", isOn: $guidance)
+          Toggle("Only through glasses or headphones", isOn: $privateAudio)
+          LabeledContent("Volume", value: "\(Int((volume * 100).rounded()))%")
           Slider(value: $volume, in: 0.05...1, step: 0.05)
           Button("Reset to quietest · 5%") { volume = 0.05 }
-          Text("5% is the quiet default. iPhone volume and the selected audio output still apply.").font(.footnote)
+          Text("Directions play quietly through the glasses and are never sent to the phone speaker while the private option is on. The screen shows the same instructions.").font(.footnote)
         }
-        Section("Batch limits and usage") {
-          Text("Up to 12 photos and 60 question subparts per batch. Nothing is uploaded until you finish scanning. Longer packets and two-provider review take more time and API credit.")
-          Text("With both APIs: 2 checklist requests, then 3 requests per group of up to 6 subparts. A malformed or incomplete response gets at most one repair per request. Network and billing errors are not automatically retried. Retrying the batch repeats these requests.")
-          Text("Keys stay in separate iPhone Keychain entries. API usage is billed by the selected providers. Check flagged answers and the source transcription in the final PDF.")
+        Section("Limits and usage") {
+          Text("Up to \(AutoScanModel.maxPages) pages per packet. Each page is one request with its neighbors as context (three in cross-check mode). Overloads and dropped connections are retried at most twice; malformed answers get one repair. Key, billing and model errors are never retried.")
+          Text("Keys stay in separate iPhone Keychain entries and are sent only to their own provider. API usage is billed by the selected providers. Check items marked NEEDS REVIEW in the PDF.")
         }.font(.footnote)
         if let error { Text(error).foregroundStyle(.red) }
         Button("Save settings") {
@@ -105,7 +135,7 @@ struct SolverSettingsView: View {
             defaults.set(claudeModel.trimmed, forKey: "claudeModel"); dismiss()
           } catch { self.error = error.localizedDescription }
         }
-      }.navigationTitle("Solver settings")
+      }.navigationTitle("Settings")
         .toolbar { Button("Close") { dismiss() } }
     }
   }

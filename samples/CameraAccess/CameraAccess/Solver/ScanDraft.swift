@@ -5,7 +5,8 @@ import ImageIO
 struct CapturedPage: Identifiable {
   let id: UUID
   let url: URL
-  var thumbnail: UIImage? {
+  /// Decodes from disk; cache the result rather than calling this from a view body.
+  func loadThumbnail() -> UIImage? {
     guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
       let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
         kCGImageSourceThumbnailMaxPixelSize: 360, kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary) else { return nil }

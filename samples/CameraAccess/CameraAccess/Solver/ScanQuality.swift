@@ -40,6 +40,10 @@ struct PageSample: Sendable {
   var closeEnough = true
   var cue: ScanCue = .hold
   var issue: String? = nil
+  /// Median detected text-line height in pixels of the full-resolution image; 0 when no text was located.
+  var linePixels: Double = 0
+  /// A deliberate command hand (thumbs up/down) in this preview frame. Stills are never classified.
+  var gesture: HandGesture? = nil
   var acceptable: Bool { issue == nil && !fingerprint.isEmpty }
   var corners: [PagePoint] {
     guard let b = contentBounds else { return [] }
@@ -122,9 +126,17 @@ struct StabilityGate: Sendable {
   private var samples = 0
   private(set) var latched = false
   let duration: TimeInterval
-  init(duration: TimeInterval = 1.5) { self.duration = duration }
+  let quickDuration: TimeInterval
+  init(duration: TimeInterval = 1.5, quickDuration: TimeInterval = 1.0) {
+    self.duration = duration; self.quickDuration = quickDuration
+  }
 
-  mutating func reset() { self = Self(duration: duration) }
+  mutating func reset() { self = Self(duration: duration, quickDuration: quickDuration) }
+
+  /// Far above every veto: sharp, contrasty, well-sized writing needs less settling time.
+  static func clearlyReadable(_ sample: PageSample) -> Bool {
+    sample.cue == .hold && sample.sharpness >= 0.0005 && sample.contrast >= 0.036 && sample.linePixels >= 14
+  }
 
   mutating func observe(_ sample: PageSample, at time: TimeInterval) -> Double {
     guard !latched else { return 1 }
@@ -137,7 +149,8 @@ struct StabilityGate: Sendable {
     }
     previous = sample; lastTime = time; samples += 1
     // Give positioning advice time to help, but don't wait forever for ideal framing or text detection.
-    let holdTime = sample.cue == .hold ? duration : max(duration, 3)
+    let holdTime = Self.clearlyReadable(sample) ? min(duration, quickDuration)
+      : (sample.cue == .hold ? duration : max(duration, 3))
     let progress = min(1, (time - (since ?? time)) / holdTime)
     if progress >= 1 && samples >= 5 { latched = true; return 1 }
     return min(progress, 0.98)
@@ -160,20 +173,39 @@ protocol PageAnalyzing: Sendable {
   func prepare(_ data: Data) async throws -> PreparedPhoto
 }
 
-struct PreparedPhoto: Sendable {
+struct PreparedPhoto: @unchecked Sendable {
   let jpeg: Data
   let sample: PageSample
   let width: Int
   let height: Int
+  /// Small orientation-corrected preview for the page queue; CGImage is immutable.
+  var thumbnail: CGImage? = nil
 }
 
 actor PageAnalyzer: PageAnalyzing {
+  private let gestures = HandGestureClassifier()
+
   func analyze(_ image: CGImage, still: Bool = false) throws -> PageSample {
+    try analyze(image, still: still, referenceHeight: nil)
+  }
+
+  /// `referenceHeight` is the full-resolution height when `image` is a downscaled copy of a still.
+  func analyze(_ image: CGImage, still: Bool, referenceHeight: Int?) throws -> PageSample {
     // Locate visible text only; no character recognition/transcription and no paper detector.
     // If text detection misses handwriting or a diagram, a steady detailed image can still proceed.
     let request = VNDetectTextRectanglesRequest()
     request.reportCharacterBoxes = true
-    try? VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
+    let handler = VNImageRequestHandler(cgImage: image, options: [:])
+    try? handler.perform([request])
+    // Separate perform: a hand-pose failure must never discard the text result.
+    var gesture: HandGesture?
+    if !still {
+      let hands = HandPoseVision.makeRequest()
+      if (try? handler.perform([hands])) != nil {
+        gesture = gestures.classify(HandPoseVision.poses(from: hands), imageWidth: image.width, imageHeight: image.height)
+      }
+    }
+    let height = Double(referenceHeight ?? image.height)
     // A sheet border can be reported as one giant "character". Use multi-character regions
     // for aiming; this is shape detection, not OCR. Unmatched handwriting/diagrams still
     // use the center-detail fallback and can capture without a text outline.
@@ -194,9 +226,10 @@ actor PageAnalyzer: PageAnalyzing {
     let motion = Self.measure(image, longestSide: 192)
     var sample = PageSample(contentBounds: bounds, luminance: metrics.mean, contrast: metrics.contrast,
       sharpness: metrics.sharpness, fingerprint: motion.fingerprint, contentFingerprint: metrics.fingerprint,
-      closeEnough: !(lineHeight > 0 && lineHeight * Double(image.height) < 10)
+      closeEnough: !(lineHeight > 0 && lineHeight * height < 10)
         && !(bounds.map { $0.width < 0.18 && $0.height < 0.14 } ?? false),
-      cue: ContentFraming.cue(bounds: bounds, lineHeight: lineHeight, imageHeight: image.height))
+      cue: ContentFraming.cue(bounds: bounds, lineHeight: lineHeight, imageHeight: Int(height)),
+      linePixels: lineHeight * height, gesture: gesture)
     // Only obvious darkness, missing detail, or heavy blur can veto a capture. Geometry cannot.
     if metrics.mean < 0.07 {
       sample.cue = .moreLight; sample.issue = sample.cue.message
@@ -218,22 +251,47 @@ actor PageAnalyzer: PageAnalyzing {
       width > 0, height > 0, width * height <= 60_000_000 else {
       throw SolverError.message("Could not decode this photo, or it exceeds 60 megapixels.")
     }
-    let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
-      kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: max(width, height)]
-    guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
-      throw SolverError.message("Could not decode this photo.")
+    func decode(_ side: Int) throws -> CGImage {
+      let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: side]
+      guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+        throw SolverError.message("Could not decode this photo.")
+      }
+      return image
     }
-    let sample = try analyze(image, still: true)
-    // Preserve full dimensions. Normalize orientation/format only; no crop, enhancement or OCR.
+    let rotated = (5...8).contains((properties[kCGImagePropertyOrientation] as? UInt32) ?? 1)
+    let fullWidth = rotated ? height : width, fullHeight = rotated ? width : height
+    let longEdge = max(width, height)
+    // Large glasses stills: a half-size check is enough only when text is clearly found and well above the
+    // close-up limit. Anything else gets the exact full-resolution check, so the detail gate never weakens.
+    var sample = PageSample()
+    var checked = false
+    if longEdge >= 2000 {
+      sample = try analyze(try decode(longEdge / 2), still: true, referenceHeight: fullHeight)
+      checked = sample.acceptable && sample.closeEnough && sample.linePixels >= 20
+    }
+    var full: CGImage?
+    if !checked {
+      let image = try decode(longEdge); full = image
+      sample = try analyze(image, still: true)
+    }
+    // Keep the glasses' original JPEG bytes (every reader applies EXIF orientation); no crop, enhancement or OCR.
+    let jpeg: Data
+    if (CGImageSourceGetType(source) as String?) == UTType.jpeg.identifier { jpeg = data }
+    else { jpeg = try Self.encodeJPEG(try full ?? decode(longEdge), quality: 0.95) }
+    guard jpeg.count < 20_000_000 else { throw SolverError.message("The photo exceeds the 20 MB upload limit.") }
+    return PreparedPhoto(jpeg: jpeg, sample: sample, width: fullWidth, height: fullHeight,
+      thumbnail: try? decode(360))
+  }
+
+  static func encodeJPEG(_ image: CGImage, quality: Double) throws -> Data {
     let output = NSMutableData()
     guard let destination = CGImageDestinationCreateWithData(output, UTType.jpeg.identifier as CFString, 1, nil) else {
       throw SolverError.message("Could not prepare the photo.")
     }
-    CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.95] as CFDictionary)
-    guard CGImageDestinationFinalize(destination), output.length < 20_000_000 else {
-      throw SolverError.message("The photo exceeds the 20 MB upload limit.")
-    }
-    return PreparedPhoto(jpeg: output as Data, sample: sample, width: image.width, height: image.height)
+    CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+    guard CGImageDestinationFinalize(destination) else { throw SolverError.message("Could not prepare the photo.") }
+    return output as Data
   }
 
   struct Metrics { let mean: Double; let contrast: Double; let sharpness: Double; let fingerprint: [Double] }
@@ -275,17 +333,21 @@ struct PageTurnGate {
   private var saved: PageSample?
   private var savedAt = 0.0
   private var changedFrames = 0
+  private var changedSince = 0.0
   mutating func saved(_ sample: PageSample, at time: Double) { saved = sample; savedAt = time; changedFrames = 0 }
   mutating func reset() { self = Self() }
+  /// Requires three consecutive changed views spanning at least 0.4 s, so per-frame analysis cannot rush it.
   mutating func observe(_ sample: PageSample, at time: Double) -> Bool {
-    guard let saved, time - savedAt >= 2, sample.acceptable, sample.closeEnough else { changedFrames = 0; return false }
+    guard let saved, time - savedAt >= 2, sample.acceptable, sample.closeEnough, sample.gesture == nil else {
+      changedFrames = 0; return false
+    }
     let a = saved.contentFingerprint, b = sample.contentFingerprint
     let changed: Bool
     if !a.isEmpty, a.count == b.count {
       let difference = zip(a, b).reduce(0.0) { $0 + abs($1.0 - $1.1) } / Double(a.count)
       changed = difference > 0.065
     } else { changed = StabilityGate.imageDifference(saved, sample) > 0.20 }
-    changedFrames = changed ? changedFrames + 1 : 0
-    return changedFrames >= 3
+    if changed { if changedFrames == 0 { changedSince = time }; changedFrames += 1 } else { changedFrames = 0 }
+    return changedFrames >= 3 && time - changedSince >= 0.4
   }
 }
