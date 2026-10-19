@@ -1,3 +1,11 @@
+# Glasses Solver: find the active app first
+
+The current Glasses Solver app is developed on `solver-app` under `samples/CameraAccess`. This default `main` branch retains the upstream baseline. Read the authoritative [AI handoff and operating guide](https://github.com/Moh-bukhari/glasses-solver/blob/solver-app/AI-HANDOFF.md), [app instructions](https://github.com/Moh-bukhari/glasses-solver/blob/solver-app/AGENTS.md), and [project lessons](https://github.com/Moh-bukhari/glasses-solver/blob/solver-app/tasks/lessons.md) before changing the solver.
+
+Inspect branch and uncommitted work, then use the active app checkout for implementation. Preserve other edits. Do not mistake the upstream samples below for the latest solver or merge app code merely to update documentation. Keep this entry point linked to the canonical guide if the active branch changes.
+
+---
+
 # Meta Wearables DAT SDK
 
 > Full API reference: https://wearables.developer.meta.com/llms.txt?full=true

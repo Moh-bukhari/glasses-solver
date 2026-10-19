@@ -1,3 +1,13 @@
+# Glasses Solver
+
+**Start with the [AI handoff and operating guide](https://github.com/Moh-bukhari/glasses-solver/blob/solver-app/AI-HANDOFF.md).** It explains the goals, complete app workflows, code map, setup/build/test process, known issues and next priorities.
+
+The active iPhone app is on **[`solver-app`](https://github.com/Moh-bukhari/glasses-solver/tree/solver-app)** under `samples/CameraAccess`. This default `main` branch retains the upstream Meta sample baseline until the app work is merged. For installation, see [SOLVER-SETUP.md on solver-app](https://github.com/Moh-bukhari/glasses-solver/blob/solver-app/SOLVER-SETUP.md). Coding agents should follow [AI-HANDOFF.md](AI-HANDOFF.md) and [AGENTS.md](AGENTS.md).
+
+The Meta SDK documentation below describes the upstream baseline.
+
+---
+
 # Meta Wearables Device Access Toolkit for iOS
 
 [![Swift Package](https://img.shields.io/badge/Swift_Package-1.0.1-brightgreen?logo=swift&logoColor=white)](https://github.com/facebook/meta-wearables-dat-ios/tags)
