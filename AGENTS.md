@@ -1,3 +1,15 @@
+# Glasses Solver: instructions for coding agents
+
+The active personal app lives on `solver-app` in `samples/CameraAccess`. Start with [AI-HANDOFF.md](AI-HANDOFF.md), [SOLVER-SETUP.md](SOLVER-SETUP.md), and [tasks/lessons.md](tasks/lessons.md). The handoff records the user goal, architecture, actual workflows, build/test/install commands, release evidence and remaining device checks without requiring earlier chat history.
+
+- Inspect current branch, code, uncommitted work and latest user requirements before editing. The repository contains other upstream sample apps; they are not the Glasses Solver target.
+- Preserve forgiving close-up capture, ordered saved pages, explicit Finish before solver uploads, quiet cues, complete-answer validation and retained drafts on failure.
+- For substantive work, define acceptance criteria and verify the affected behavior. Keep simulated evidence distinct from physical glasses/microphone and paid API tests.
+- Keep AI-HANDOFF and user setup instructions current when behavior, release status or operating commands change. Record lessons from incorrect assumptions; do not maintain conflicting architecture copies in agent entry files.
+- The technical Meta SDK reference below remains applicable to SDK integration work.
+
+---
+
 # Meta Wearables DAT SDK
 
 > Full API reference: https://wearables.developer.meta.com/llms.txt?full=true

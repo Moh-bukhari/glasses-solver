@@ -19,3 +19,4 @@ Meta's SDK resolves a keychain access group during initialization. Simulator tes
 
 - Swift 6 legacy AVAudio/Speech callbacks created inside a MainActor class must be explicitly Sendable even when their bodies only touch a locked helper. Test the actual callback on a background executor; a fake voice service and a successful IPA build cannot catch an executor assertion on the first microphone buffer.
 - Permission prompts can outlive cancellation. Guard each asynchronous startup with a unique run identity, not only an active Boolean, and prepare voice permissions before starting capture.
+- The default GitHub branch can still be an upstream sample baseline. Keep a canonical app handoff with clear entry links from both branches, and check the active branch before assuming the latest solver code is present. Update the handoff when behavior or verification status changes instead of relying on earlier chat history.

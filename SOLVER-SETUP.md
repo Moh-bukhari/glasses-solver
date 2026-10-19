@@ -18,9 +18,9 @@ No Mac is needed. GitHub builds an unsigned IPA; iloader signs it on installatio
 2. Hold the first paper close enough that small writing is readable. Follow head/camera directions: left/right, tilt up/down, closer/back, then hold still. Capture starts on the first stable usable view, without demanding a clean background or sheet corners.
 3. Wait for **“Page 1 saved”**, then turn to the next page. A changed writing region rearms capture. For similar-looking pages, say **“next page”** after turning the page. This also prevents a stationary page from being repeatedly captured.
 4. Repeat for the whole packet. Say **“retake last page”** if a capture was wrong. The previous photo stays saved until a clear replacement arrives.
-5. Say **“finish scanning”**. Only now are the photos uploaded. The app announces the checklist, solving, comparison and PDF stages. The combined PDF opens automatically.
+5. Say **“finish scanning”**. Only now are the saved paper photos sent to the AI providers. The app announces the checklist, solving, comparison and PDF stages. The combined PDF opens automatically.
 
-**“Cancel scanning”** pauses and keeps the draft. On-screen Next/Finish/Pause buttons are available. If English on-device speech is unavailable or permission is denied, the app reports that and provides the Finish button; it does not secretly send microphone audio to a cloud recognizer.
+**“Cancel scanning”** pauses collection and keeps the draft. Finish stops command listening before the AI work; use the visible Pause control to stop solving. On-screen Next/Finish/Pause buttons are available. If English on-device speech is unavailable or permission is denied, the app reports that and provides the Finish button; it does not secretly send microphone audio to a cloud recognizer.
 
 Keep the app visible and iPhone unlocked throughout capture and solving. Auto-lock is temporarily disabled. Backgrounding cancels active work while preserving saved photos. Initial Meta permission handoff is an exception. This version does not promise locked-phone operation. Speech uses iOS's selected route; real glasses microphone/audio routing needs a physical test.
 
@@ -57,7 +57,7 @@ Single-provider mode uses that API for inventory, solving and a separate review.
 
 Each finished packet saves `Solution.pdf`, `Solution.json`, `Paper.jpg`, and subsequent `Paper-2.jpg` etc. in **Files → On My iPhone → Glasses Solver → Solutions**. The **PDFs** tab lists results. Each PDF contains a coverage checklist, original labels, source-page references, worked calculations, answers, checks, review flags and all source photographs. Math uses Unicode/plain text rather than a LaTeX typesetting engine. Older solutions remain readable.
 
-Keys are stored in separate, device-only Keychain accounts and are sent only in authentication headers to their corresponding API. Never put keys in GitHub or chat. Both mode sends the packet and draft answers to both services; neither key is shared with the other provider. Preview analysis and speech recognition stay on device. OpenAI requests set `store: false`; that is not a guarantee about all provider retention.
+Keys are stored in separate, device-only Keychain accounts and are sent only in authentication headers to their corresponding API. Never put keys in GitHub or chat. Both APIs receive the packet. Claude audits OpenAI's question inventory; OpenAI receives Claude's audited inventory and both solution drafts for reconciliation. Claude does not receive OpenAI's solution draft. Neither key is shared with the other provider. Preview analysis and speech recognition stay on device. The Meta SDK has separate device communications/telemetry; the Finish boundary applies to solver paper uploads. OpenAI requests set `store: false`; that is not a guarantee about all provider retention.
 
 Default Claude model: `claude-sonnet-5-5`, with an Opus 5.5 preset and editable model IDs. OpenAI retains the existing `solverModel` preference, defaulting to `gpt-5.4`. Availability depends on your provider account.
 
