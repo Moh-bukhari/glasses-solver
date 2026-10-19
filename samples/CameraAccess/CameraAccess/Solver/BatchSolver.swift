@@ -65,7 +65,7 @@ enum AIServiceError: LocalizedError, Equatable {
     case .http(_, let status, _, let detail):
       // Spend caps and exhausted credit look like 429 but never recover by waiting.
       if detail.contains("enforced_spend_limit_reached") || detail.contains("insufficient_quota") { return false }
-      return [408, 409, 429, 500, 502, 503, 504, 529].contains(status)
+      return [408, 409, 429].contains(status) || ((500...599).contains(status) && ![501, 505].contains(status))
     }
   }
   var retryAfter: Double? { if case .http(_, _, let value, _) = self { return value }; return nil }
@@ -103,9 +103,9 @@ struct SolverClient: AITransport {
   private let session: URLSession
   init(session: URLSession? = nil) {
     let configuration = URLSessionConfiguration.ephemeral
-    // Idle limit between streamed bytes (reasoning can be quiet for a while), and a hard cap per attempt.
-    configuration.timeoutIntervalForRequest = 240
-    configuration.timeoutIntervalForResource = 900
+    // Idle limit between streamed bytes: OpenAI sends nothing while it reasons, so allow long silences.
+    configuration.timeoutIntervalForRequest = 600
+    configuration.timeoutIntervalForResource = 1800
     self.session = session ?? URLSession(configuration: configuration)
   }
   func send(_ input: AIRequest) async throws -> Data {
@@ -129,10 +129,15 @@ struct SolverClient: AITransport {
     return try parser.finish()
   }
   static let effort = "medium"
+  /// Repairs may use more output only on models that accept it; older IDs (e.g. gpt-4.1) cap near 32k.
+  static func outputLimit(_ requested: Int, model: String) -> Int {
+    let large = ["gpt-5", "gpt-6", "o3", "o4", "claude-opus-5", "claude-sonnet-5", "claude-haiku-5"].contains(where: model.hasPrefix)
+    return large ? requested : min(requested, 32_000)
+  }
   static func request(_ input: AIRequest) throws -> URLRequest {
     let isClaude = input.credential.provider == .claude
     var request = URLRequest(url: URL(string: isClaude ? "https://api.anthropic.com/v1/messages" : "https://api.openai.com/v1/responses")!)
-    request.httpMethod = "POST"; request.timeoutInterval = 240
+    request.httpMethod = "POST"; request.timeoutInterval = 600
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
     var content: [[String: Any]] = []
@@ -274,9 +279,16 @@ struct StreamParser {
     guard json != "[DONE]", let event = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
       let type = event["type"] as? String else { return false }
     if type == "error" {
-      let error = event["error"] as? [String: Any] ?? event
-      let kind = (error["type"] as? String) ?? (error["code"] as? String) ?? "error"
-      throw AIServiceError.interrupted(provider: provider, detail: kind)
+      // Claude nests {type, message} under "error"; OpenAI puts {code, message} at the top level.
+      let error = event["error"] as? [String: Any]
+      let kind = (error?["type"] as? String) ?? (event["code"] as? String)
+      let message = (error?["message"] as? String) ?? (event["message"] as? String) ?? "Request failed."
+      let transient: Set<String> = ["overloaded_error", "api_error", "timeout_error", "rate_limit_error", "server_error",
+        "rate_limit_exceeded", "overloaded"]
+      guard let kind, !transient.contains(kind) else {
+        throw AIServiceError.interrupted(provider: provider, detail: kind ?? "error")
+      }
+      throw SolverError.message("\(provider.name) rejected this page (\(kind)): \(message)")
     }
     if provider == .claude {
       switch type {

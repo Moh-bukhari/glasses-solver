@@ -16,6 +16,8 @@ struct PageJob: Sendable {
   let primary: URL
   let previous: URL?
   let next: URL?
+  /// Items this page skipped as belonging to the previous page, which that page did not solve.
+  var mustSolve: [String] = []
 }
 
 enum PagePlan {
@@ -34,27 +36,45 @@ enum PagePlan {
     let ordered = pages.sorted { $0.number < $1.number }
     let total = ordered.last?.number ?? 0
     var problems: [SolvedProblem] = []
-    var seen: [String: String] = [:]
-    var review = 0
+    var previous: (number: Int, items: Set<String>) = (-1, [])
+    var review = 0, merged = 0
     for page in ordered {
+      var items: Set<String> = []
       for item in page.result.solutions {
-        let label = PageResult.normalized(item.label), text = String(PageResult.normalized(item.problem).prefix(120))
-        if seen[label] == text { continue }
-        seen[label] = text
+        // Only overlapping photos of neighboring pages repeat a question; compare the whole transcription.
+        let key = PageResult.normalized(item.label) + "|" + PageResult.normalized(item.problem)
+        items.insert(key)
+        if previous.number == page.number - 1 && previous.items.contains(key) { merged += 1; continue }
         let flagged = item.status.lowercased() != "solved"
         if flagged { review += 1 }
         let sources = item.sourcePages.filter { (1...max(1, total)).contains($0) }
-        problems.append(SolvedProblem(problem: item.problem, steps: item.steps, answer: item.answer, check: item.check,
+        func filled(_ text: String) -> String { text.trimmed.isEmpty ? "—" : text }
+        let steps = item.steps.filter { !$0.trimmed.isEmpty }
+        problems.append(SolvedProblem(problem: item.problem, steps: steps.isEmpty ? ["See the review note."] : steps,
+          answer: filled(item.answer), check: filled(item.check),
           label: item.label, sourcePages: sources.isEmpty ? [page.number] : sources,
           reviewNote: (flagged ? "NEEDS REVIEW: " : "") + item.reviewNote))
       }
+      previous = (page.number, items)
     }
     guard !problems.isEmpty else {
       throw SolverError.message("No questions were found on these pages. Check the photos; your pages are saved.")
     }
     let title = ordered.map(\.result.title.trimmed).first { !$0.isEmpty } ?? "Worked solutions"
-    let coverage = "\(ordered.count) source pages solved page by page. \(problems.count) questions/subparts included; \(review) need review. Each page's checklist of visible labels was matched against its solutions. This cannot guarantee that every symbol was read correctly; compare the transcriptions with the source photos."
+    let repeats = merged == 0 ? "" : " \(merged) repeated from an overlapping photo \(merged == 1 ? "was" : "were") listed once."
+    let coverage = "\(ordered.count) source pages solved page by page. \(problems.count) questions/subparts included; \(review) need review.\(repeats) Each page's checklist of visible labels was matched against its solutions or the page that owns them. This cannot guarantee that every symbol was read correctly; compare the transcriptions with the source photos."
     return SolvedPage(readable: true, retakeReason: "", title: title, problems: problems, coverage: coverage, providers: providers)
+  }
+
+  /// Labels a page skipped as belonging to an earlier page that no earlier page actually solved.
+  static func orphanedSkips(_ pages: [(number: Int, result: PageResult)]) -> [Int: [String]] {
+    var solved: Set<String> = [], orphans: [Int: [String]] = [:]
+    for page in pages.sorted(by: { $0.number < $1.number }) {
+      let missing = page.result.skipped.map(\.label).filter { !solved.contains(PageResult.loose($0)) }
+      if !missing.isEmpty { orphans[page.number] = missing }
+      solved.formUnion(page.result.solutions.map { PageResult.loose($0.label) })
+    }
+    return orphans
   }
 }
 
@@ -82,9 +102,15 @@ struct PageResult: Codable, Sendable {
       skipped: skipped)
   }
   static func normalized(_ label: String) -> String { label.lowercased().filter { $0.isLetter || $0.isNumber } }
+  /// Ignores a word prefix such as "Q" or "Problem" so "Q3(b)" and "3b" match.
+  static func loose(_ label: String) -> String {
+    let value = normalized(label)
+    guard let digit = value.firstIndex(where: \.isNumber) else { return value }
+    return String(value[digit...])
+  }
 
-  /// `mustCover` holds normalized labels that an earlier draft solved (cross-check reconciliation).
-  func validate(page: Int, mustCover: Set<String> = []) throws {
+  /// `mustCover` holds labels an earlier draft solved (cross-check); `mustSolve` labels must be solved here.
+  func validate(page: Int, mustCover: Set<String> = [], mustSolve: [String] = []) throws {
     guard readable else {
       throw AIResultError.unreadable("Page \(page): \(retake.trimmed.isEmpty ? "show all writing clearly in a closer photo." : retake.trimmed)")
     }
@@ -94,16 +120,31 @@ struct PageResult: Codable, Sendable {
     }
     guard solutions.allSatisfy({ item in
       let status = item.status.lowercased()
-      return !item.problem.trimmed.isEmpty && !item.steps.isEmpty && item.steps.allSatisfy { !$0.trimmed.isEmpty }
-        && !item.answer.trimmed.isEmpty && !item.check.trimmed.isEmpty && Self.statuses.contains(status)
-        && (status == "solved" || !item.reviewNote.trimmed.isEmpty)
+      guard Self.statuses.contains(status), !item.problem.trimmed.isEmpty else { return false }
+      // Unresolved items explain what is missing; there may be no answer to give or check.
+      guard status == "solved" else { return !item.reviewNote.trimmed.isEmpty }
+      return !item.steps.isEmpty && item.steps.allSatisfy { !$0.trimmed.isEmpty }
+        && !item.answer.trimmed.isEmpty && !item.check.trimmed.isEmpty
     }) else {
-      throw AIResultError.repairable("An answer is empty or lacks a check. Include worked calculations, a final answer, and verification for every item; explain unresolved items in reviewNote.")
+      throw AIResultError.repairable("An answer is empty or lacks a check. Include worked calculations, a final answer, and verification for every solved item; explain unresolved items in reviewNote.")
     }
     let covered = Set(labels).union(skipped.map { Self.normalized($0.label) })
-    let missing = checklist.filter { !covered.contains(Self.normalized($0)) } + mustCover.filter { !covered.contains($0) }.sorted()
+    let looseCovered = Set(covered.map(Self.loose))
+    // A question number whose lettered subparts are all answered ("3" with "3(a)", "3(b)") is covered.
+    func isCovered(_ label: String) -> Bool {
+      let value = Self.normalized(label)
+      if covered.contains(value) || looseCovered.contains(Self.loose(label)) { return true }
+      return covered.contains { $0.count > value.count && $0.hasPrefix(value)
+        && $0[$0.index($0.startIndex, offsetBy: value.count)].isLetter }
+    }
+    let missing = checklist.filter { !isCovered($0) } + mustCover.filter { !looseCovered.contains(Self.loose($0)) }.sorted()
     guard missing.isEmpty else {
-      throw AIResultError.repairable("These items have no solution: \(missing.joined(separator: ", ")). Solve every item that begins on the primary page, or list it in skipped with the reason.")
+      throw AIResultError.repairable("These items have no solution: \(missing.joined(separator: ", ")). Solve every item whose label appears on the primary page, or list it in skipped with the reason.")
+    }
+    let solvedHere = Set(labels.map(Self.loose))
+    let unsolved = mustSolve.filter { !solvedHere.contains(Self.loose($0)) }
+    guard unsolved.isEmpty else {
+      throw AIResultError.repairable("Solve these items on this page; the previous page did not: \(unsolved.joined(separator: ", ")).")
     }
   }
 }
@@ -146,31 +187,32 @@ actor PageSolver: PageSolving {
              progress: @escaping @Sendable (String) -> Void) async throws -> PageResult {
     try configuration.validate()
     let photos = try photos(for: job), task = Self.task(for: job), lead = configuration.lead
+    let mustSolve = job.mustSolve
     guard let peer = configuration.peer else {
-      return try await decoded(lead, photos: photos, prompt: task, page: job.number, progress: progress)
+      return try await decoded(lead, photos: photos, prompt: task, page: job.number, mustSolve: mustSolve, progress: progress)
     }
-    async let first = decoded(lead, photos: photos, prompt: task, page: job.number, progress: progress)
-    async let second = decoded(peer, photos: photos, prompt: task, page: job.number, progress: progress)
+    async let first = decoded(lead, photos: photos, prompt: task, page: job.number, mustSolve: mustSolve, progress: progress)
+    async let second = decoded(peer, photos: photos, prompt: task, page: job.number, mustSolve: mustSolve, progress: progress)
     let (a, b) = try await (first, second)
-    let required = Set((a.solutions + b.solutions).map { PageResult.normalized($0.label) })
+    let required = Set((a.solutions + b.solutions).map(\.label))
     return try await decoded(lead, photos: photos, prompt: task + Self.reconcile(a, b, lead: lead.provider, peer: peer.provider),
-      page: job.number, mustCover: required, progress: progress)
+      page: job.number, mustCover: required, mustSolve: mustSolve, progress: progress)
   }
 
   /// One repair for malformed, truncated or self-inconsistent output. Never for refusals or unreadable pages.
   private func decoded(_ credential: AICredential, photos: [AIPhoto], prompt: String, page: Int, mustCover: Set<String> = [],
-                       progress: @escaping @Sendable (String) -> Void) async throws -> PageResult {
+                       mustSolve: [String] = [], progress: @escaping @Sendable (String) -> Void) async throws -> PageResult {
     var correction = ""
     for attempt in 0..<2 {
       try Task.checkCancellation()
       do {
         let data = try await send(AIRequest(credential: credential, photos: photos, prompt: prompt + correction,
-          tokenLimit: attempt == 0 ? 32_000 : 48_000), page: page, progress: progress)
+          tokenLimit: SolverClient.outputLimit(attempt == 0 ? 32_000 : 48_000, model: credential.model)), page: page, progress: progress)
         try Task.checkCancellation()
         let result: PageResult
         do { result = try JSONDecoder().decode(PageResult.self, from: data) }
         catch { throw AIResultError.repairable("The response did not contain the required complete JSON result.") }
-        try result.validate(page: page, mustCover: mustCover)
+        try result.validate(page: page, mustCover: mustCover, mustSolve: mustSolve)
         return result
       } catch AIResultError.repairable(let reason) {
         guard attempt == 0 else {
@@ -207,7 +249,8 @@ actor PageSolver: PageSolving {
   static func isTransient(_ error: any Error) -> Bool {
     if let error = error as? AIServiceError { return error.isRetryable }
     if let error = error as? URLError {
-      return [.timedOut, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
+      // An idle timeout after minutes of silence would only repeat; dropped connections are worth a retry.
+      return [.networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
         .notConnectedToInternet].contains(error.code)
     }
     return false
@@ -233,16 +276,21 @@ actor PageSolver: PageSolving {
   }
 
   static func task(for job: PageJob) -> String {
-    """
+    var text = """
     Solve the PRIMARY page (source page \(job.number) of the packet). The images are labeled.
-    \(job.previous == nil ? "There is no previous page." : "The PREVIOUS page is context: shared data, and questions that began there.")
-    \(job.next == nil ? "There is no next page: the PRIMARY page is the last page of the packet." : "The NEXT page is context only for a question that begins on the PRIMARY page and continues there.")
-    checklist: the full label of EVERY question or subpart visible on the PRIMARY page, in order, including any you skip.
-    solutions: completely solve every checklist item that begins on the PRIMARY page. If it continues onto the NEXT page, use that page and finish it here. sourcePages lists every source page number the solution uses.
-    skipped: list an item, with the reason, only if it began on the PREVIOUS page or the PRIMARY photo repeats or overlaps the PREVIOUS page; those are solved with the previous page. Never skip for any other reason.
-    readable: false only if essential content of an item that begins on the PRIMARY page cannot be read; then retake says exactly what to recapture. Otherwise retake is an empty string.
-    title: a short title for the topic of the packet. reviewNote: empty when solved; otherwise exactly what is unresolved.
+    OWNERSHIP RULE: every answerable item (a question, or each lettered/numbered subpart) belongs to the page where its OWN label first appears.
+    \(job.previous == nil ? "There is no previous page." : "The PREVIOUS page provides shared stems, data and figures for items on the PRIMARY page.")
+    \(job.next == nil ? "There is no next page: the PRIMARY page is the last page of the packet." : "Use the NEXT page only to finish an item whose own text is cut off at the bottom of the PRIMARY page.")
+    checklist: the full label of every answerable item whose label is visible on the PRIMARY page, in order; when a question has subparts, list the subparts, not the parent number.
+    solutions: completely solve every checklist item this page owns, using the other pages for shared context. sourcePages lists every source page number the solution uses.
+    skipped: list an item, with the reason, only if its OWN label already appears on the PREVIOUS page (its continuation, or a repeated/overlapping photo). Never skip for any other reason, and never skip a subpart just because its parent question began earlier.
+    readable: false only if essential content of an item this page owns cannot be read; then retake says exactly what to recapture. Otherwise retake is an empty string.
+    title: a short title for the topic of the packet. reviewNote: empty when solved; otherwise exactly what is unresolved. For unresolved items, steps, answer and check state what can and cannot be determined.
     """
+    if !job.mustSolve.isEmpty {
+      text += "\nThe previous page did not solve these items, so they MUST be solved here, not skipped: \(job.mustSolve.joined(separator: ", "))."
+    }
+    return text
   }
 
   static func reconcile(_ a: PageResult, _ b: PageResult, lead: AIProvider, peer: AIProvider) throws -> String {

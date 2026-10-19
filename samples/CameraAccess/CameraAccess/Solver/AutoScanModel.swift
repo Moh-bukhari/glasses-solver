@@ -68,6 +68,8 @@ final class AutoScanModel {
   @ObservationIgnored private var jobs: [PageJobKey: (token: UUID, task: Task<Void, Never>)] = [:]
   @ObservationIgnored private var results: [PageJobKey: (number: Int, result: PageResult)] = [:]
   @ObservationIgnored private var jobErrors: [PageJobKey: String] = [:]
+  /// Pages already re-solved once to claim an item that both neighbors skipped.
+  @ObservationIgnored private var claimed: Set<PageJobKey> = []
 
   init(camera: any ScanCamera, analyzer: any PageAnalyzing = PageAnalyzer(),
        solver: any PageSolving = PageSolver(), saver: any SolutionSaving = SolutionStore(),
@@ -426,7 +428,7 @@ final class AutoScanModel {
     begin(imported: true)
     solveSetup = configuration // a corrected key or model applies to every page still to solve
     planFinal = true
-    jobErrors = [:] // finishing again retries only the pages that failed
+    jobErrors = [:]; claimed = [] // finishing again retries only the pages that failed
     phase = .solving; progress = 0
     syncJobs()
     let remaining = pages.count - solvedPages
@@ -449,11 +451,11 @@ final class AutoScanModel {
     refreshPageStates()
   }
 
-  private func startJob(_ key: PageJobKey, _ configuration: SolverConfiguration) {
+  private func startJob(_ key: PageJobKey, _ configuration: SolverConfiguration, mustSolve: [String] = []) {
     guard let index = pages.firstIndex(where: { $0.id == key.page }) else { return }
     let urls = Dictionary(uniqueKeysWithValues: pages.map { ($0.id, $0.url) })
     let job = PageJob(key: key, number: index + 1, primary: pages[index].url,
-      previous: key.previous.flatMap { urls[$0] }, next: key.next.flatMap { urls[$0] })
+      previous: key.previous.flatMap { urls[$0] }, next: key.next.flatMap { urls[$0] }, mustSolve: mustSolve)
     let token = UUID(), solver = self.solver
     let notify: @Sendable (String) -> Void = { [weak self] message in
       Task { @MainActor in self?.solveNotice(message) }
@@ -521,6 +523,17 @@ final class AutoScanModel {
       // A removed earlier page renumbers later pages without changing their content or context.
       return (index + 1, cached.result.shifted(by: index + 1 - cached.number))
     }
+    // A page may skip an item as "belonging to the previous page" that the previous page did not solve.
+    // Re-solve that page once, requiring those items, so nothing silently falls between pages.
+    for (number, labels) in PagePlan.orphanedSkips(entries).sorted(by: { $0.key < $1.key }) {
+      guard keys.indices.contains(number - 1) else { continue }
+      let key = keys[number - 1]
+      guard !claimed.contains(key) else { continue }
+      claimed.insert(key); results[key] = nil
+      startJob(key, configuration, mustSolve: labels)
+      guide = "Completing \(labels.joined(separator: ", ")) on page \(number)…"
+      refreshPageStates(); return
+    }
     save(entries, providers: configuration.summary)
   }
 
@@ -548,7 +561,7 @@ final class AutoScanModel {
   private func clearPacket() {
     do { try draft.clear() } catch { guide = "Could not clear the previous draft. \(error.localizedDescription)"; return }
     for job in jobs.values { job.task.cancel() }
-    jobs = [:]; results = [:]; jobErrors = [:]; solveSetup = nil; planFinal = false
+    jobs = [:]; results = [:]; jobErrors = [:]; claimed = []; solveSetup = nil; planFinal = false
     pages = []; thumbnails = [:]; pageStates = [:]; solveStatus = ""
     let solver = self.solver
     Task { await solver.forget(keeping: []) }

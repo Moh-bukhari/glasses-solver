@@ -556,15 +556,32 @@ final class AutoScanTests: XCTestCase {
     XCTAssertTrue(model.guide.contains("replaced"), model.guide)
     model.stop()
   }
+  func testQuestionSkippedByBothNeighborsIsClaimedBeforeThePDF() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let solver = FakePageSolver(orphanOnPage: 2), saver = FakeSolutionSaver()
+    let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), solver, saver)
+    model.solveWhileScanning = false
+    model.importPhoto(camera.data); await waitUntil { model.pages.count == 1 && model.phase == .idle }
+    model.importPhoto(camera.data); await waitUntil { model.pages.count == 2 && model.phase == .idle }
+    model.finishScanning(); await waitUntil { model.phase == .finished }
+    XCTAssertEqual(model.phase, .finished, model.guide)
+    let calls = await solver.calls, claim = await solver.jobs.last
+    XCTAssertEqual(calls, 3, "Page 2 is solved again, once, to claim the orphaned item.")
+    XCTAssertEqual(claim?.number, 2); XCTAssertEqual(claim?.mustSolve, ["5(b)"])
+    XCTAssertTrue(saver.lastPage?.problems.contains { $0.label == "5(b)" } == true)
+    model.stop()
+  }
   func testFailedPageIsRetriedAloneAndSolvedPagesAreKept() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
     let solver = FakePageSolver(failFirstAttemptOfPage: 1), saver = FakeSolutionSaver()
     let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), solver, saver)
+    model.solveWhileScanning = false // both pages are first solved at Finish, where page 1 fails once
     model.importPhoto(camera.data); await waitUntil { model.pages.count == 1 && model.phase == .idle }
     model.importPhoto(camera.data); await waitUntil { model.pages.count == 2 && model.phase == .idle }
     model.finishScanning(); await waitUntil { model.phase == .failed }
     XCTAssertTrue(model.guide.contains("Solved pages are kept"), model.guide)
-    XCTAssertEqual(model.pageStates[model.pages[1].id], .solved)
+    let second = try XCTUnwrap(model.pages.last?.id)
+    XCTAssertEqual(model.pageStates[second], .solved)
     var calls = await solver.calls; XCTAssertEqual(calls, 2)
     model.finishScanning(); await waitUntil { model.phase == .finished }
     calls = await solver.calls
@@ -706,11 +723,12 @@ private actor FakePageSolver: PageSolving {
   let delay: Bool
   let failure: (any Error)?
   let failFirstAttemptOfPage: Int?
+  let orphanOnPage: Int?
   private(set) var calls = 0
   private(set) var jobs: [PageJob] = []
   private var failedOnce = false
-  init(delay: Bool = false, failure: (any Error)? = nil, failFirstAttemptOfPage: Int? = nil) {
-    self.delay = delay; self.failure = failure; self.failFirstAttemptOfPage = failFirstAttemptOfPage
+  init(delay: Bool = false, failure: (any Error)? = nil, failFirstAttemptOfPage: Int? = nil, orphanOnPage: Int? = nil) {
+    self.delay = delay; self.failure = failure; self.failFirstAttemptOfPage = failFirstAttemptOfPage; self.orphanOnPage = orphanOnPage
   }
   func solve(_ job: PageJob, configuration: SolverConfiguration,
              progress: @escaping @Sendable (String) -> Void) async throws -> PageResult {
@@ -723,6 +741,15 @@ private actor FakePageSolver: PageSolving {
     let item = PageSolutionItem(label: "1(a) p\(job.number)", problem: "2x + 3 = 11 on page \(job.number)",
       steps: ["Subtract 3.", "Divide by 2."], answer: "x = 4", check: "2 × 4 + 3 = 11", status: "solved",
       reviewNote: "", sourcePages: [job.number])
+    if job.number == orphanOnPage {
+      // The page wrongly skips 5(b) as belonging to the previous page, unless it is told to solve it.
+      let claimed = PageSolutionItem(label: "5(b)", problem: "Speed after 3 m", steps: ["Use energy."], answer: "v = 5 m/s",
+        check: "Units m/s", status: "solved", reviewNote: "", sourcePages: [job.number - 1, job.number])
+      return job.mustSolve.isEmpty
+        ? PageResult(readable: true, retake: "", title: "Linear equation", checklist: [item.label, "5(b)"], solutions: [item],
+            skipped: [SkippedItem(label: "5(b)", reason: "question 5 began on the previous page")])
+        : PageResult(readable: true, retake: "", title: "Linear equation", checklist: [item.label, "5(b)"], solutions: [item, claimed], skipped: [])
+    }
     return PageResult(readable: true, retake: "", title: "Linear equation", checklist: [item.label], solutions: [item], skipped: [])
   }
   func forget(keeping urls: Set<URL>) {}

@@ -74,6 +74,9 @@ final class AutoScanCamera: ScanCamera {
   private var inputsWasActive = false
   private var inputsStale = false
   private var inputsUnavailable = false
+  private var inputsFailures = 0
+  private var nextInputsAttach = ContinuousClock.now
+  private var restartingPreview = false
   private var lastCommand: (command: ScanCommand, at: ContinuousClock.Instant)?
   /// Integration-test hook: glasses buttons are attached and delivering.
   var inputsActive: Bool { inputs?.state == .active }
@@ -111,8 +114,12 @@ final class AutoScanCamera: ScanCamera {
     newSession.statePublisher.listen { [weak self] state in
       Task { @MainActor in
         guard let self, self.generation == id else { return }
-        if state == .stopped { self.onProblem?("Glasses disconnected. Put them on and start again.") }
-        else { self.notePause(state == .paused) }
+        switch state {
+        case .stopped: self.onProblem?("Glasses disconnected. Put them on and start again.")
+        case .paused: self.notePause(true)
+        case .started: self.notePause(self.streamState == .paused)
+        default: break // starting/stopping are transitions, not a resume
+        }
       }
     }.store(in: sessionTokens)
     try newSession.start()
@@ -125,14 +132,16 @@ final class AutoScanCamera: ScanCamera {
       Task { @MainActor in
         guard let self, self.generation == id else { return }
         self.streamState = state
-        if state == .paused { self.notePause(true) } else if state == .streaming { self.notePause(false) }
+        if state == .paused { self.notePause(true) }
+        else if state == .streaming { self.notePause(self.session?.state == .paused) }
       }
     }.store(in: streamTokens)
     newCamera.stream.errorPublisher.listen { [weak self] error in
       Task { @MainActor in
         guard let self, self.generation == id else { return }
         self.streamFailure = error.localizedDescription
-        if !self.capturing { self.onProblem?(error.localizedDescription) }
+        // During capture or a preview restart the error surfaces from the wait, so the model can reconnect.
+        if !self.capturing && !self.restartingPreview { self.onProblem?(error.localizedDescription) }
       }
     }.store(in: streamTokens)
     newCamera.stream.videoFramePublisher.listen { [weak self] frame in
@@ -181,8 +190,15 @@ final class AutoScanCamera: ScanCamera {
   func resumePreview() async throws {
     guard let camera, let session, session.state != .stopped else { throw SolverError.message("Glasses session ended. Start again.") }
     capturing = false; streamFailure = nil
+    restartingPreview = true; defer { restartingPreview = false }
     // Never restart the stream while the wearer has paused the session; resume when they tap again.
     try await wait(seconds: 10, message: "Glasses session ended. Start again.") { session.state == .started }
+    // Stream and Photo cannot share the camera: a failed still may leave Photo running.
+    if photoState != .stopped {
+      camera.photo.stop()
+      try? await wait(seconds: 5, message: "Photo capture did not stop.") { self.photoState == .stopped }
+      streamFailure = nil
+    }
     camera.stream.start()
     try await wait(seconds: 20, message: "Camera preview timed out.") { self.streamState == .streaming }
   }
@@ -242,7 +258,7 @@ final class AutoScanCamera: ScanCamera {
     sessionFailure = nil; streamFailure = nil; photoFailure = nil
     photoData = nil; streamPhotoData = nil; capturing = false; fallback = false
     photoRequested = false; streamPhotoRequested = false; pausedNoticeShown = false
-    inputsUnavailable = false; lastCommand = nil
+    inputsUnavailable = false; inputsFailures = 0; nextInputsAttach = .now; lastCommand = nil; restartingPreview = false
   }
 
   private func announceShutter() {
@@ -263,7 +279,8 @@ final class AutoScanCamera: ScanCamera {
   // MARK: Glasses buttons (experimental Meta Inputs)
 
   private func attachInputsIfNeeded(id: UUID) {
-    guard glassesButtons, !inputsUnavailable, !capturing, generation == id, let session, session.state == .started else { return }
+    guard glassesButtons, !inputsUnavailable, !capturing, generation == id, ContinuousClock.now >= nextInputsAttach,
+      let session, session.state == .started else { return }
     if inputs != nil {
       guard inputsStale else { return }
       detachInputs()
@@ -271,12 +288,8 @@ final class AutoScanCamera: ScanCamera {
     let attached: Inputs?
     do {
       attached = try session.addInputs(configuration: InputsConfiguration(sources: [.captouch, .captureButton, .actionButton], consumeBack: true))
-    } catch {
-      inputsUnavailable = true
-      onNotice?("Glasses buttons are unavailable. Use a thumbs-up or the screen to finish.")
-      return
-    }
-    guard let attached else { return }
+    } catch { inputsFailed(); return }
+    guard let attached else { inputsFailed(); return }
     inputs = attached; inputsStale = false; inputsWasActive = false
     let events = attached.events
     inputsTask = Task { [weak self] in
@@ -288,7 +301,7 @@ final class AutoScanCamera: ScanCamera {
     attached.statePublisher.listen { [weak self] state in
       Task { @MainActor in
         guard let self, self.generation == id, self.inputs === attached else { return }
-        if state == .active { self.inputsWasActive = true }
+        if state == .active { self.inputsWasActive = true; self.inputsFailures = 0 }
         // A full-resolution photo or a doff deactivates Inputs; re-attach on the next preview frame.
         else if state == .inactive, self.inputsWasActive { self.inputsStale = true }
       }
@@ -299,9 +312,18 @@ final class AutoScanCamera: ScanCamera {
         if error == .permissionDenied || error == .capabilityUnavailable {
           self.inputsUnavailable = true
           self.onNotice?("Glasses buttons are not enabled for this app. Use a thumbs-up or the screen to finish.")
-        } else { self.inputsStale = true }
+        } else { self.inputsFailed() }
       }
     }.store(in: inputsTokens)
+  }
+
+  /// Retry with backoff; after repeated failures stop trying for this scan and say so once.
+  private func inputsFailed() {
+    inputsFailures += 1; inputsStale = true
+    if inputsFailures >= 3 {
+      inputsUnavailable = true
+      onNotice?("Glasses buttons are unavailable. Use a thumbs-up or the screen to finish.")
+    } else { nextInputsAttach = .now + .seconds(2 * inputsFailures) }
   }
 
   private func detachInputs() {

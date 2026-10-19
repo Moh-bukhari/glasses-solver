@@ -38,6 +38,56 @@ final class PageSolvingTests: XCTestCase {
     XCTAssertThrowsError(try PagePlan.combine([(1, result([]))], providers: "fixture"))
     XCTAssertEqual(result([item("4", "Q", page: 5)]).shifted(by: -1).solutions[0].sourcePages, [4])
   }
+  func testParentNumbersUnresolvedItemsAndLooseLabelsDoNotForceRepairs() throws {
+    let parts = [item("3(a)", "f'(x)", page: 1), item("3(b)", "f'(2)", page: 1)]
+    XCTAssertNoThrow(try result(parts, checklist: ["3", "3(a)", "3(b)"]).validate(page: 1), "A parent number is covered by its subparts.")
+    XCTAssertThrowsError(try result([item("12(a)", "x", page: 1)], checklist: ["1", "12(a)"]).validate(page: 1), "'1' is not a parent of '12(a)'.")
+    let missingData = PageSolutionItem(label: "4", problem: "Find the mass", steps: [], answer: "", check: "", status: "insufficient_information",
+      reviewNote: "The density is not given.", sourcePages: [1])
+    XCTAssertNoThrow(try result([missingData]).validate(page: 1))
+    let combined = try PagePlan.combine([(1, result([missingData]))], providers: "fixture")
+    XCTAssertEqual(combined.problems[0].answer, "—"); XCTAssertFalse(combined.problems[0].steps.isEmpty)
+    XCTAssertNoThrow(try result([item("3(b)", "x", page: 1)]).validate(page: 1, mustCover: ["Q3(b)"]), "Cross-check drafts may spell labels differently.")
+    // A must-solve item that is missing or skipped again is sent back for repair.
+    XCTAssertThrowsError(try result([item("1(a)", "x", page: 2)], checklist: ["1(a)"]).validate(page: 2, mustSolve: ["5(b)"]))
+    let skippedClaim = PageResult(readable: true, retake: "", title: "T", checklist: ["5(b)"], solutions: [],
+      skipped: [SkippedItem(label: "5(b)", reason: "began earlier")])
+    XCTAssertThrowsError(try skippedClaim.validate(page: 2, mustSolve: ["5(b)"]))
+  }
+  func testItemsSkippedOnBothPagesAreDetected() {
+    let one = result([item("5(a)", "Block on incline", page: 1)])
+    let two = PageResult(readable: true, retake: "", title: "T", checklist: ["5(b)", "6"], solutions: [item("6", "Next", page: 2)],
+      skipped: [SkippedItem(label: "5(b)", reason: "question 5 began on the previous page")])
+    XCTAssertEqual(PagePlan.orphanedSkips([(1, one), (2, two)]), [2: ["5(b)"]])
+    let repeated = PageResult(readable: true, retake: "", title: "T", checklist: ["5(a)"], solutions: [],
+      skipped: [SkippedItem(label: "5 (a)", reason: "overlapping photo")])
+    XCTAssertTrue(PagePlan.orphanedSkips([(1, one), (2, repeated)]).isEmpty, "A repeat of an item the previous page solved is fine.")
+    let firstPage = PageResult(readable: true, retake: "", title: "T", checklist: ["1"], solutions: [], skipped: [SkippedItem(label: "1", reason: "x")])
+    XCTAssertEqual(PagePlan.orphanedSkips([(1, firstPage)]), [1: ["1"]])
+    var job = PageJob(key: PageJobKey(page: UUID(), previous: UUID(), next: nil, last: true, setup: "s"), number: 2,
+      primary: URL(fileURLWithPath: "/p"), previous: URL(fileURLWithPath: "/q"), next: nil)
+    job.mustSolve = ["5(b)"]
+    XCTAssertTrue(PageSolver.task(for: job).contains("MUST be solved here, not skipped: 5(b)"))
+  }
+  func testOpenAIStreamErrorsAreRetriedOnlyWhenTransient() throws {
+    var server = StreamParser(provider: .openAI)
+    XCTAssertThrowsError(try server.consume(#"data: {"type":"error","code":"server_error","message":"x","param":null}"#)) {
+      XCTAssertTrue(PageSolver.isTransient($0))
+    }
+    var invalid = StreamParser(provider: .openAI)
+    XCTAssertThrowsError(try invalid.consume(#"data: {"type":"error","code":"invalid_prompt","message":"Bad image","param":null}"#)) {
+      XCTAssertFalse(PageSolver.isTransient($0)); XCTAssertTrue($0.localizedDescription.contains("Bad image"))
+    }
+    var claude = StreamParser(provider: .claude)
+    XCTAssertThrowsError(try claude.consume(#"data: {"type":"error","error":{"type":"invalid_request_error","message":"no"}}"#)) {
+      XCTAssertFalse(PageSolver.isTransient($0))
+    }
+  }
+  func testRepairOutputStaysWithinOlderModelLimits() {
+    XCTAssertEqual(SolverClient.outputLimit(48_000, model: "gpt-6.1-sol"), 48_000)
+    XCTAssertEqual(SolverClient.outputLimit(48_000, model: "claude-opus-5-5"), 48_000)
+    XCTAssertEqual(SolverClient.outputLimit(48_000, model: "gpt-4.1"), 32_000)
+  }
   func testPageResultValidationRequiresCoverageAndCompleteAnswers() throws {
     let solved = item("1(a)", "Solve", page: 1)
     XCTAssertNoThrow(try PageResult(readable: true, retake: "", title: "T", checklist: ["1(a)", "1(b)"], solutions: [solved],
@@ -136,7 +186,9 @@ final class PageSolvingTests: XCTestCase {
     XCTAssertTrue(PageSolver.isTransient(AIServiceError.http(provider: .claude, status: 529, retryAfter: nil, detail: "")))
     XCTAssertTrue(PageSolver.isTransient(AIServiceError.http(provider: .openAI, status: 429, retryAfter: 3, detail: "rate_limit_exceeded")))
     XCTAssertTrue(PageSolver.isTransient(URLError(.networkConnectionLost)))
-    XCTAssertTrue(PageSolver.isTransient(URLError(.timedOut)))
+    XCTAssertTrue(PageSolver.isTransient(AIServiceError.http(provider: .openAI, status: 520, retryAfter: nil, detail: "")))
+    XCTAssertFalse(PageSolver.isTransient(URLError(.timedOut)), "An idle timeout after minutes of silence would only repeat.")
+    XCTAssertFalse(PageSolver.isTransient(AIServiceError.http(provider: .openAI, status: 501, retryAfter: nil, detail: "")))
     for status in [400, 401, 402, 403, 404, 413] {
       XCTAssertFalse(PageSolver.isTransient(AIServiceError.http(provider: .openAI, status: status, retryAfter: nil, detail: "")))
     }
@@ -254,7 +306,8 @@ final class PageSolvingTests: XCTestCase {
     XCTAssertEqual(request.photos.map { String($0.label.prefix(8)) }, ["PREVIOUS", "PRIMARY ", "NEXT pag"])
     XCTAssertTrue(request.photos[0].label.contains("source page 1") && request.photos[2].label.contains("source page 3"))
     XCTAssertTrue(request.prompt.contains("source page 2"))
-    XCTAssertTrue(request.prompt.contains("began on the PREVIOUS page"))
+    XCTAssertTrue(request.prompt.contains("OWNERSHIP RULE"))
+    XCTAssertTrue(request.prompt.contains("never skip a subpart just because its parent question began earlier"))
     let last = PageJob(key: key, number: 3, primary: files[2], previous: files[1], next: nil)
     XCTAssertTrue(PageSolver.task(for: last).contains("There is no next page"))
   }
