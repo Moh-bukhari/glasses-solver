@@ -11,7 +11,7 @@ final class AutoScanModel {
   static let maxPages = 30
 
   private(set) var phase: Phase = .idle
-  private(set) var guide = "Tap Start (or use the Start Glasses Scan shortcut) and look at the first page. Thumbs-up when you're done."
+  private(set) var guide = "Tap Start (or use the Start Glasses Scan shortcut), then take photos of page 1 with the capture button on your glasses."
   private(set) var voiceStatus = ""
   private(set) var solveStatus = ""
   private(set) var progress = 0.0
@@ -41,12 +41,24 @@ final class AutoScanModel {
   var solveWhileScanning = false
   /// Each page is checked by the AI while the wearer still looks at it; the scan moves on only once it is clear.
   var checkPages = true
-  /// How pages are photographed: the clearest live preview frames (fast, several per page) or one full-resolution still.
-  enum CaptureMode: String, CaseIterable, Sendable { case frames, photos }
-  var captureMode = CaptureMode.frames
+  /// How pages are photographed. `buttonPhotos` (2.6 default): the wearer takes each photo with the glasses' capture
+  /// button and the Meta AI app imports it into Photos, where the app picks it up; much sharper than the video stream.
+  /// `frames`: the clearest live preview frames (several per page). `photos`: one full-resolution still per page.
+  enum CaptureMode: String, CaseIterable, Sendable { case buttonPhotos, frames, photos }
+  var captureMode = CaptureMode.buttonPhotos
+  /// Glasses photos: how many reached the app and how long the last one took (Meta AI's import delay).
+  private(set) var photoStatus = ""
+  /// Photos access is missing or limited; the view links to the app's page in iOS Settings.
+  private(set) var needsPhotoAccess = false
+  /// Glasses photos: the page being photographed, and photos of a later sheet taken before that page was clear.
+  private var openPhotos: [PagePhoto] = []
+  private var laterPhotos: [PagePhoto] = []
+  var hasOpenPhotos: Bool { !openPhotos.isEmpty || !laterPhotos.isEmpty || !photoEvents.isEmpty || !intake.isEmpty }
   var isRunning: Bool { [.connecting, .seeking, .awaitingNext, .capturing, .checking, .solving, .saving].contains(phase) }
   var isCollecting: Bool { [.seeking, .awaitingNext, .capturing, .checking].contains(phase) }
-  var canFinish: Bool { !pages.isEmpty && !packetSolved && [.idle, .failed, .seeking, .awaitingNext].contains(phase) }
+  var canFinish: Bool {
+    (!pages.isEmpty || hasOpenPhotos) && !packetSolved && [.idle, .failed, .seeking, .awaitingNext].contains(phase)
+  }
   var solvedPages: Int { pages.filter { pageStates[$0.id] == .solved }.count }
 
   @ObservationIgnored private let camera: any ScanCamera
@@ -57,6 +69,7 @@ final class AutoScanModel {
   @ObservationIgnored private let draft: ScanDraftStore
   @ObservationIgnored private let configurationProvider: () -> SolverConfiguration
   @ObservationIgnored private let voice: any ScanSpeaking
+  @ObservationIgnored private let photos: any PhotoSource
   @ObservationIgnored private var worker: Task<Void, Never>?
   @ObservationIgnored private var analysisTask: Task<Void, Never>?
   @ObservationIgnored private var previewTask: Task<Void, any Error>?
@@ -154,13 +167,43 @@ final class AutoScanModel {
   static let checkTimeout: TimeInterval = 20
   /// Views kept per page while it is checked; the AI may need a few close-ups of a crowded sheet.
   static let frameConfiguration: PageFrames.Configuration = { var value = PageFrames.Configuration(); value.maxFrames = 8; return value }()
+  // Glasses photos (see "Glasses photos" below): no glasses camera stream runs; photos come from the photo library.
+  /// The current (or last) scan takes the glasses' own photos.
+  private(set) var photoScan = false
+  /// The photo library is being watched for this scan.
+  @ObservationIgnored private var watchingPhotos = false
+  /// Photos that reached the app, looked at in order for a hand command before they join a page.
+  @ObservationIgnored private var intake: [IncomingPhoto] = []
+  @ObservationIgnored private var intakeTask: Task<Void, Never>?
+  /// Page photos and commands in the order they were taken, waiting for the open page's check.
+  @ObservationIgnored private var photoEvents: [PhotoEvent] = []
+  @ObservationIgnored private var photoCheck: Task<Void, Never>?
+  @ObservationIgnored private var photoTimer: Task<Void, Never>?
+  /// Library photos already used in this packet: a continued scan looks back and sees recent photos again.
+  @ObservationIgnored private var usedPhotos: Set<String> = []
+  /// Where a continued scan picks up: when the last one stopped, or its oldest photo not yet on a saved page.
+  @ObservationIgnored private var photosResumeFrom: Date?
+  @ObservationIgnored private var photosReceived = 0
+  @ObservationIgnored private var photoStart = 0.0
+  @ObservationIgnored private var photoHintGiven = false
+  /// Checks of the open page so far, and whether the wearer heard that a photo shows the page before again.
+  @ObservationIgnored private var pageChecks = 0
+  @ObservationIgnored private var earlierSpoken = false
+  /// A few photos and an upload of each: slower than a check of live frames.
+  static let photoCheckTimeout: TimeInterval = 40
+  /// Without any photo this long after Start, the wearer hears how photos reach the phone.
+  static let photoHintAfter: TimeInterval = 45
+  /// After this long without a new photo, the pages taken so far are solved.
+  static let photoIdleFinish: TimeInterval = 600
+  private struct PagePhoto: Sendable { let id: String; let jpeg: Data; let taken: Date }
+  private enum PhotoEvent { case photo(PagePhoto), command(ScanCommand) }
 
   init(camera: any ScanCamera, analyzer: any PageAnalyzing = PageAnalyzer(),
        solver: any PageSolving = PageSolver(), checker: any PageChecking = PageChecker(), saver: any SolutionSaving = SolutionStore(),
-       draft: ScanDraftStore = ScanDraftStore(), voice: any ScanSpeaking = ScanVoice(),
+       draft: ScanDraftStore = ScanDraftStore(), voice: any ScanSpeaking = ScanVoice(), photos: any PhotoSource = PhotoLibraryInbox(),
        configurationProvider: @escaping () -> SolverConfiguration = { SolverKeychain.configuration() }) {
     self.camera = camera; self.analyzer = analyzer; self.solver = solver; self.checker = checker; self.saver = saver
-    self.draft = draft; self.voice = voice; self.configurationProvider = configurationProvider
+    self.draft = draft; self.voice = voice; self.photos = photos; self.configurationProvider = configurationProvider
     pages = draft.load()
     packetSolved = !pages.isEmpty && draft.isSolved
     loadThumbnails()
@@ -195,7 +238,8 @@ final class AutoScanModel {
     }
     if let index, !pages.indices.contains(index) { return }
     if index == nil && packetSolved { clearPacket() } // one button: after a PDF, Start begins a new packet
-    begin(imported: false); replacing = index
+    if captureMode == .buttonPhotos { startPhotos(replacing: index); return }
+    begin(imported: false); replacing = index; photoScan = false
     planFinal = false; helpGiven = []; handsFree = true; fixing = false; lastSaved = nil
     refreshSolveSetup()
     syncJobs()
@@ -206,14 +250,7 @@ final class AutoScanModel {
     worker = Task { [weak self] in
       guard let self else { return }
       do {
-        if voiceCommands {
-          guide = "Preparing voice commands…"; voiceStatus = "Checking microphone and speech permissions…"
-          await voice.startCommands()
-          try Task.checkCancellation(); guard runID == id else { return }
-        } else { voiceStatus = ""; voice.prepareOutput() }
-        if voiceGuidance && privateAudio && !voice.routeIsPrivate {
-          voiceStatus = "Glasses audio isn't connected, so directions are shown on screen only."
-        }
+        try await prepareVoice(id: id)
         guide = "Connecting to your glasses…"
         try await camera.start(); try Task.checkCancellation()
         guard runID == id else { return }
@@ -233,11 +270,23 @@ final class AutoScanModel {
     }
   }
 
+  /// Voice commands (if on) and the audio route, before a scan's first direction.
+  private func prepareVoice(id: UUID) async throws {
+    if voiceCommands {
+      guide = "Preparing voice commands…"; voiceStatus = "Checking microphone and speech permissions…"
+      await voice.startCommands()
+      try Task.checkCancellation(); guard runID == id else { throw CancellationError() }
+    } else { voiceStatus = ""; voice.prepareOutput() }
+    if voiceGuidance && privateAudio && !voice.routeIsPrivate {
+      voiceStatus = "Glasses audio isn't connected, so directions are shown on screen only."
+    }
+  }
+
   func importPhoto(_ data: Data, replacing index: Int? = nil) {
     guard !isRunning, pages.count < Self.maxPages || index != nil else { return }
     if let index, !pages.indices.contains(index) { return }
     if index == nil && packetSolved { clearPacket() }
-    begin(imported: true); replacing = index; handsFree = false; fixing = false
+    begin(imported: true); replacing = index; handsFree = false; fixing = false; photoScan = false
     refreshSolveSetup()
     let id = runID; phase = .checking; guide = "Checking the selected photo…"
     worker = Task { [weak self] in await self?.process(data: data, id: id) }
@@ -260,13 +309,17 @@ final class AutoScanModel {
     noteActivity()
     switch command {
     case .finish:
-      guard !pages.isEmpty || !pageFrames.isEmpty || [.capturing, .checking].contains(phase) else {
-        if isCollecting { guide = "Scan at least one page first."; say("Scan a page first.") }
+      guard !pages.isEmpty || !pageFrames.isEmpty || hasOpenPhotos || [.capturing, .checking].contains(phase) else {
+        if isCollecting {
+          guide = photoScan ? "Take a photo of page 1 first." : "Scan at least one page first."
+          say(photoScan ? "Take a photo of page 1 first." : "Scan a page first.")
+        }
         return
       }
       finishScanning()
     case .next:
-      if phase == .awaitingNext { nextPage() }
+      if photoScan && isCollecting { keepPhotoPage() }
+      else if phase == .awaitingNext { nextPage() }
       else if phase == .seeking && captureMode == .frames && !imported && !pageFrames.isEmpty {
         // Live frames: the wearer keeps the page as it is, checked or not; save what was kept.
         armAfterTurn = false
@@ -308,6 +361,7 @@ final class AutoScanModel {
     replacing = index; attempts = 0; forceCapture = false; holdForNext = false; finishRequested = false
     gate.reset(); turnGate.reset(); progress = 0; phase = .seeking
     discardOpenPage() // frames of the page being scanned are dropped; that page is scanned again after the retake
+    laterPhotos = []
     armAfterTurn = !inView; armGate.reset(); armDeadline = .infinity
     guard armAfterTurn else { return }
     // Remember the view from before the hand was raised; a frame with the hand in it would make lowering it look like a page turn.
@@ -356,31 +410,40 @@ final class AutoScanModel {
     worker = nil; analysisTask = nil
     for job in jobs.values { job.task.cancel() }
     jobs = [:]
-    camera.stop(); gate.reset(); turnGate.reset(); gestureGate.reset(); fixing = false
+    camera.stop(); stopPhotos(); gate.reset(); turnGate.reset(); gestureGate.reset(); fixing = false
     voice.stopCommands(); voice.stopSpeaking(); phase = .idle; progress = 0
     guide = "Paused. \(pages.count) pages remain saved."; restoreIdleTimer(); endBackgroundWork()
     refreshPageStates()
   }
   /// Leaving the screen stops the camera but never cancels page solving or PDF creation.
   func backgrounded() {
-    if !jobs.isEmpty { beginBackgroundWork() } // let page solves in flight finish while iOS allows
+    if !jobs.isEmpty || (photoScan && isCollecting) { beginBackgroundWork() } // let solves and checks in flight finish
     guard isCollecting else { return } // `connecting` may hand off to Meta AI for permission
+    // Glasses photos keep arriving in the library (Meta AI may need to be opened to import them); they are picked up
+    // as soon as the app is back.
+    if photoScan { return }
     pauseScanning("Paused when the app left the screen. Your pages are saved; tap Continue or run the Glasses Scan shortcut.")
     say("Scanning paused. Open the app or run your Glasses Scan shortcut to continue.")
   }
+  /// The app is in the foreground again: look for glasses photos imported meanwhile.
+  func foregrounded() {
+    guard photoScan && isCollecting else { return }
+    photos.catchUp()
+    if jobs.isEmpty { endBackgroundWork() }
+  }
   func viewDisappeared() {
-    guard isCollecting || phase == .connecting else { return }
+    guard (isCollecting || phase == .connecting) && !photoScan else { return }
     pauseScanning("Scanning paused. Your pages are saved.")
   }
   private func pauseScanning(_ message: String) {
     runID = UUID(); worker?.cancel(); analysisTask?.cancel(); cancelPreviewRestart(); worker = nil; analysisTask = nil
-    camera.stop(); gate.reset(); turnGate.reset(); gestureGate.reset(); voice.stopCommands(); fixing = false
+    camera.stop(); stopPhotos(); gate.reset(); turnGate.reset(); gestureGate.reset(); voice.stopCommands(); fixing = false
     phase = .idle; progress = 0; guide = message; restoreIdleTimer()
   }
 
   private func begin(imported: Bool) {
     runID = UUID(); worker?.cancel(); analysisTask?.cancel(); analysisTask = nil; cancelPreviewRestart(); cameraProblem = nil
-    camera.stop(); voice.stopCommands(); voice.stopSpeaking()
+    camera.stop(); stopPhotos(); voice.stopCommands(); voice.stopSpeaking()
     gate.reset(); turnGate.reset(); speechGate.reset(); gestureGate.reset()
     self.imported = imported; replacing = nil; finishRequested = false; forceCapture = false; captureFailures = 0
     holdForNext = false; armAfterTurn = false; armGate.reset(); armDeadline = .infinity; recentViews = []; noteActivity()
@@ -552,7 +615,7 @@ final class AutoScanModel {
   }
 
   /// Pages are checked when the wearer scans with the glasses, a key is set, and checks have not failed for good.
-  private var checksActive: Bool { checkPages && captureMode == .frames && !imported && checkKey && checksOff == nil }
+  private var checksActive: Bool { checkPages && (photoScan || captureMode == .frames) && !imported && checkKey && checksOff == nil }
 
   private typealias KeptFrame = (id: Int, image: CGImage, sample: PageSample)
   private var openFrames: [KeptFrame] {
@@ -580,7 +643,7 @@ final class AutoScanModel {
           (try images.map { try PageAnalyzer.encodeJPEG($0, quality: 0.9) }, reference.flatMap { try? Data(contentsOf: $0) })
         }.value
         let verdict = try await withDeadline(Self.checkTimeout) {
-          try await checker.check(jpegs, page: number, reference: earlier, configuration: configuration)
+          try await checker.check(jpegs, page: number, context: PageCheckContext(reference: earlier), configuration: configuration)
         }
         outcome = .success((verdict, jpegs))
       } catch { outcome = .failure(error) }
@@ -707,6 +770,7 @@ final class AutoScanModel {
     pageCheck?.cancel(); pageCheck = nil; lastChange = -Double.infinity; checkedThrough = -Double.infinity
     checkRounds = 0; checkFailures = 0; retryCheckAt = .infinity; lastRetake = ""; finishAnyway = false
     verdictThrough = -Double.infinity; verdictAt = -Double.infinity; reminded = false
+    openPhotos = []; photoCheck?.cancel(); photoCheck = nil; pageChecks = 0; earlierSpoken = false
   }
 
   /// The page being scanned: the one it replaces, or the next new page.
@@ -815,6 +879,7 @@ final class AutoScanModel {
     let urls = Set(pages.flatMap(\.frames)), solver = self.solver
     Task { await solver.forget(keeping: urls) }
     UINotificationFeedbackGenerator().notificationOccurred(.success)
+    if photoScan && !imported { photoPageSaved(index, checked: checked); return }
     if finishRequested {
       restart?.cancel(); finishRequested = false; phase = .idle; finishScanning(); return
     }
@@ -878,7 +943,343 @@ final class AutoScanModel {
   private func noteActivity() { lastActivity = ProcessInfo.processInfo.systemUptime }
   private func refreshSolveSetup() {
     let configuration = configurationProvider()
-    solveSetup = solveWhileScanning && (try? configuration.validate()) != nil ? configuration : nil
+    // Glasses photos always solve as they go: each page once the next one is saved.
+    solveSetup = (solveWhileScanning || photoScan) && (try? configuration.validate()) != nil ? configuration : nil
+  }
+
+  // MARK: Glasses photos
+
+  /// The wearer takes each photo with the glasses' capture button. Nothing streams from the glasses: Meta AI imports the
+  /// photos into Photos, and each one is checked with the page it belongs to as soon as it arrives. A page is saved once
+  /// it is clear (or the wearer keeps it), and solved as soon as the next page is saved.
+  private func startPhotos(replacing index: Int?) {
+    begin(imported: false); replacing = index; photoScan = true
+    planFinal = false; helpGiven = []; handsFree = true; fixing = false; lastSaved = nil
+    refreshSolveSetup(); syncJobs()
+    let keyMissing = (try? configurationProvider().validate()) == nil
+    checkKey = !keyMissing; checksOff = nil; failedCheckPages = 0
+    photosReceived = 0; photoHintGiven = false; needsPhotoAccess = false
+    photoStatus = "Waiting for the first photo from Meta AI…"
+    // Continue where this packet's last scan stopped (at most 10 minutes back), allowing a small clock difference.
+    let now = Date()
+    let since = max(min(photosResumeFrom ?? now, now), now.addingTimeInterval(-600)).addingTimeInterval(-ButtonPhotos.lookback)
+    let id = runID
+    phase = .connecting; guide = "Opening your photos…"
+    worker = Task { [weak self] in
+      guard let self else { return }
+      do {
+        try await prepareVoice(id: id)
+        try await photos.start(since: since) { [weak self] photo in self?.receivePhoto(photo, run: id) }
+        try Task.checkCancellation(); guard runID == id else { return }
+      } catch {
+        guard runID == id else { return }
+        needsPhotoAccess = error is PhotoSourceError
+        fail(error.localizedDescription); return
+      }
+      watchingPhotos = true; photosResumeFrom = nil
+      phase = .seeking; noteActivity(); photoStart = ProcessInfo.processInfo.systemUptime
+      startPhotoTimer(run: id)
+      let number = openNumber
+      if let index {
+        guide = "Take page \(index + 1) again with the capture button."; say("Take page \(index + 1) again.")
+      } else if keyMissing {
+        guide = "No API key yet, so each photo is saved as its own page. Add a key in Settings before you finish."
+        say("Ready. No API key yet, so each photo is saved as its own page.")
+      } else {
+        guide = "Page \(number): take photos with the capture button on your glasses. You'll hear when it's clear. A photo of a thumbs-up solves."
+        say(pages.isEmpty ? "Ready. Take a photo of page 1 with the capture button. I'll tell you when it's clear."
+          : "Ready for page \(number).")
+      }
+      pumpPhotos()
+    }
+  }
+
+  private func receivePhoto(_ photo: IncomingPhoto, run: UUID) {
+    guard runID == run, photoScan, !usedPhotos.contains(photo.id) else { return }
+    usedPhotos.insert(photo.id); photosReceived += 1; noteActivity()
+    let delay = max(0, Int(photo.arrived.timeIntervalSince(photo.taken).rounded()))
+    photoStatus = "\(photosReceived) photo\(photosReceived == 1 ? "" : "s") received. The last one reached the phone \(delay) s after it was taken."
+    intake.append(photo); drainIntake(run: run)
+  }
+
+  /// Looks at each photo, in order, for a hand command held up to the glasses before it joins a page, so a command
+  /// never overtakes the photos taken before it.
+  private func drainIntake(run: UUID) {
+    guard intakeTask == nil else { return }
+    let analyzer = self.analyzer
+    intakeTask = Task { [weak self] in
+      while let self, self.runID == run, let photo = self.intake.first {
+        self.intake.removeFirst()
+        let jpeg = photo.jpeg
+        let gesture = await analyzer.photoGesture(jpeg)
+        let thumbnail = await Task.detached(priority: .userInitiated) { PageAnalyzer.thumbnail(jpeg, maxPixel: 720) }.value
+        guard self.runID == run else { return }
+        if let thumbnail { self.preview = thumbnail }
+        self.photoEvents.append(gesture.map { .command(Self.command(for: $0)) }
+          ?? .photo(PagePhoto(id: photo.id, jpeg: jpeg, taken: photo.taken)))
+        self.pumpPhotos()
+      }
+      guard let self, self.runID == run else { return }
+      self.intakeTask = nil; self.pumpPhotos()
+    }
+  }
+  private static func command(for gesture: HandGesture) -> ScanCommand {
+    switch gesture {
+    case .thumbsUp: return .finish
+    case .thumbsRight, .openPalm: return .next
+    case .thumbsLeft, .thumbsDown: return .previous
+    }
+  }
+  private var photoBusy: Bool { photoCheck != nil || !photoEvents.isEmpty || !intake.isEmpty || intakeTask != nil }
+
+  /// Moves the photos taken next into the open page and checks it: one check at a time, in the order photos were taken,
+  /// so a command photo (👍 solve, 👉 keep the page, 👈 retake the page before) applies after the photos before it.
+  private func pumpPhotos() {
+    guard photoScan, phase == .seeking, photoCheck == nil else { return }
+    if case .command(let command)? = photoEvents.first {
+      photoEvents.removeFirst(); handle(command); pumpPhotos(); return
+    }
+    var batch: [PagePhoto] = []
+    while case .photo(let photo)? = photoEvents.first { photoEvents.removeFirst(); batch.append(photo) }
+    guard !batch.isEmpty else {
+      if finishRequested && !photoBusy { finishScanning() }
+      return
+    }
+    guard replacing != nil || pages.count < Self.maxPages else {
+      photoEvents = []; finishRequested = true; finishAnyway = true
+      guide = "That's the limit of \(Self.maxPages) pages. Solving."; say(guide)
+      if !photoBusy { finishScanning() }
+      return
+    }
+    openPhotos += batch
+    if checksActive { startPhotoCheck(); return }
+    // Without a check nothing tells sheets apart, so each photo is its own page.
+    photoEvents.insert(contentsOf: openPhotos.dropFirst().map { .photo($0) }, at: 0)
+    openPhotos = [openPhotos[0]]
+    commitPhotoPage(checked: false)
+  }
+
+  /// Checks every photo of the open page together. A retake is compared with an earlier photo of that page, and a new
+  /// page with a photo of the page before it, so a late photo of a finished sheet never starts a duplicate page.
+  private func startPhotoCheck() {
+    let checked = openPhotos
+    guard !checked.isEmpty else { return }
+    let run = runID, generation = pageGeneration, number = openNumber, configuration = configurationProvider()
+    let checker = self.checker
+    let reference = replacing.flatMap { pages.indices.contains($0) ? pages[$0].frames.first : nil }
+    let earlierPage = replacing == nil ? pages.last?.frames.first : nil
+    guide = "Checking page \(number)…"; progress = 0
+    if pageChecks == 0 && checkFailures == 0 { say("Checking page \(number).") }
+    photoCheck = Task { [weak self] in
+      let outcome: Result<PageVerdict, any Error>
+      do {
+        let (sameSheet, earlier) = await Task.detached(priority: .userInitiated) {
+          (reference.flatMap { try? Data(contentsOf: $0) }, earlierPage.flatMap { try? Data(contentsOf: $0) })
+        }.value
+        let context = PageCheckContext(reference: sameSheet, earlier: earlier, buttonPhotos: true)
+        let jpegs = checked.map(\.jpeg)
+        outcome = .success(try await withDeadline(Self.photoCheckTimeout) {
+          try await checker.check(jpegs, page: number, context: context, configuration: configuration)
+        })
+      } catch { outcome = .failure(error) }
+      self?.photoChecked(outcome, photos: checked, run: run, generation: generation)
+    }
+  }
+
+  private func photoChecked(_ outcome: Result<PageVerdict, any Error>, photos checked: [PagePhoto], run: UUID, generation: Int) {
+    guard runID == run, generation == pageGeneration, photoScan, phase == .seeking else { return }
+    photoCheck = nil; pageChecks += 1
+    let number = openNumber
+    switch outcome {
+    case .success(let verdict):
+      failedCheckPages = 0; checkFailures = 0
+      func ids(_ numbers: [Int]) -> Set<String> {
+        Set(numbers.filter { checked.indices.contains($0 - 1) }.map { checked[$0 - 1].id })
+      }
+      let earlier = ids(verdict.earlierSheet), other = ids(verdict.otherSheet)
+      let unusable = earlier.union(other).union(ids(verdict.blurry))
+      openPhotos.removeAll { unusable.contains($0.id) }
+      // Photos of the next sheet wait until this page is done; while retaking a page, other sheets are not wanted.
+      if replacing == nil {
+        laterPhotos = (laterPhotos + checked.filter { other.contains($0.id) && !earlier.contains($0.id) }).sorted { $0.taken < $1.taken }
+      }
+      if !earlier.isEmpty && !earlierSpoken && number > 1 {
+        earlierSpoken = true; say("That's page \(number - 1) again. It's already saved.")
+      }
+      if verdict.clear && !openPhotos.isEmpty { commitPhotoPage(checked: true); return }
+      if openPhotos.isEmpty {
+        if !laterPhotos.isEmpty {
+          // Nothing usable of this page: the next sheet's photos start it.
+          photoEvents.insert(contentsOf: laterPhotos.map { .photo($0) }, at: 0); laterPhotos = []
+        } else if checked.allSatisfy({ earlier.contains($0.id) }) {
+          guide = "Page \(number): take a photo of it with the capture button."
+        } else {
+          let message = replacing != nil && !other.isEmpty ? "That's a different sheet. Take page \(number) again."
+            : "Page \(number): \(verdict.say)"
+          guide = message; progress = 0; say(message)
+        }
+        pumpPhotos(); return
+      }
+      let advice = verdict.say
+      let message: String
+      if finishRequested {
+        finishRequested = false; finishAnyway = true
+        message = "Page \(number): \(advice) Or a thumbs-up photo solves anyway."
+      } else if verdict.notShownYet && laterPhotos.isEmpty {
+        message = "Page \(number): \(advice)" // the wearer may still be photographing the sheet
+      } else {
+        checkRounds += 1
+        if !laterPhotos.isEmpty {
+          message = "Page \(number) isn't clear yet: \(advice) Go back to it, or a thumbs-right photo keeps it as it is."
+        } else if checkRounds >= Self.maxCheckRounds {
+          message = "Page \(number) still isn't clear: \(advice) A thumbs-right photo keeps it as it is."
+        } else {
+          message = "Page \(number): \(advice)"
+        }
+      }
+      lastRetake = advice; verdictAt = ProcessInfo.processInfo.systemUptime
+      guide = message; progress = 0; say(message)
+      pumpPhotos()
+    case .failure(let error):
+      if error is CancellationError { return }
+      if Self.stopsChecks(error) {
+        // A key, billing or model problem would fail every page.
+        checksOff = error.localizedDescription
+        say("Page checks are off. \(error.localizedDescription) Each photo is saved as its own page.")
+        commitPhotoPage(checked: false); return
+      }
+      checkFailures += 1
+      if checkFailures >= 2 {
+        failedCheckPages += 1
+        if failedCheckPages >= 2 {
+          checksOff = "The AI did not answer the page checks."
+          say("Couldn't check page \(number), so it's saved without a check. Page checks are off; each photo is now its own page.")
+        } else {
+          say("Couldn't check page \(number), so it's saved without a check.")
+        }
+        commitPhotoPage(checked: false); return
+      }
+      guide = "Couldn't check page \(number). Trying again…"; say("Checking page \(number) again.")
+      photoCheck = Task { [weak self] in
+        try? await Task.sleep(for: .seconds(2))
+        guard let self, self.runID == run, self.pageGeneration == generation, self.phase == .seeking else { return }
+        self.photoCheck = nil; self.startPhotoCheck()
+      }
+    }
+  }
+
+  /// Saves the open page's photos in the order they were taken; the photos after them continue with the next page.
+  private func commitPhotoPage(checked: Bool) {
+    let kept = openPhotos.sorted { $0.taken < $1.taken }
+    guard photoScan, phase == .seeking, !kept.isEmpty else { return }
+    let run = runID
+    photoCheck?.cancel(); photoCheck = nil
+    phase = .checking; progress = 0; guide = "Saving page \(openNumber)…"
+    Task { [weak self] in
+      let jpegs = kept.map(\.jpeg)
+      let thumbnail = await Task.detached(priority: .userInitiated) { PageAnalyzer.thumbnail(jpegs[0]) }.value
+      guard let self, self.runID == run else { return }
+      self.discardOpenPage()
+      do { try await self.saved(jpegs, thumbnail: thumbnail, restart: nil, id: run, checked: checked) }
+      catch { guard self.runID == run else { return }; self.fail(error.localizedDescription + " Your saved pages are kept.") }
+    }
+  }
+
+  /// 👉 (a thumbs-right photo, the phone or a voice command): the open page is saved as it is, checked or not.
+  private func keepPhotoPage() {
+    guard phase == .seeking else { return }
+    guard !openPhotos.isEmpty else {
+      let message = "Take a photo of page \(openNumber) first."
+      guide = message; say(message); return
+    }
+    commitPhotoPage(checked: false)
+  }
+
+  /// A page is saved: say so, and go on with any photos already taken after it.
+  private func photoPageSaved(_ index: Int, checked: Bool) {
+    phase = .seeking; progress = 0
+    if !laterPhotos.isEmpty { photoEvents.insert(contentsOf: laterPhotos.map { .photo($0) }, at: 0); laterPhotos = [] }
+    let done = "\(pageName(index)) \(checked ? "is clear" : "saved")."
+    if finishRequested || !photoEvents.isEmpty || pages.count >= Self.maxPages {
+      guide = done; say(done) // photos of the next page are already here, or the scan is finishing
+    } else {
+      let next = "Take page \(pages.count + 1)."
+      guide = "\(done) \(next) A photo of a thumbs-up solves everything."
+      say(helpGiven.insert("photoSaved").inserted ? "\(done) \(next) When you're done, take a photo of a thumbs-up." : "\(done) \(next)")
+    }
+    pumpPhotos()
+  }
+
+  /// Finishing a glasses-photo scan: photos still on their way are checked first, and the open page is saved (once
+  /// clear, or as it is after the wearer heard it is unclear). Returns true once only solving is left.
+  private func finishPhotoPages() -> Bool {
+    if photoBusy {
+      if !finishRequested { say("Finishing after the last photos are checked.") }
+      finishRequested = true; guide = "Finishing after the last photos are checked…"; return false
+    }
+    if !openPhotos.isEmpty {
+      if checksActive && !finishAnyway && !lastRetake.isEmpty {
+        finishAnyway = true; finishRequested = false
+        let message = "Page \(openNumber) still isn't clear: \(lastRetake) Or a thumbs-up photo solves anyway."
+        guide = message; say(message); return false
+      }
+      finishRequested = true; commitPhotoPage(checked: false); return false
+    }
+    if !laterPhotos.isEmpty {
+      photoEvents = laterPhotos.map { .photo($0) }; laterPhotos = []
+      finishRequested = true; pumpPhotos(); return false
+    }
+    guard !pages.isEmpty else {
+      // Every photo so far was unreadable or of a page already done.
+      finishRequested = false
+      guide = "No page is saved yet. Take a photo of page 1."; say(guide); return false
+    }
+    return true
+  }
+
+  /// Stops watching for photos. Photos not yet on a saved page are freed, so continuing the scan picks them up again.
+  private func stopPhotos() {
+    photos.stop()
+    if watchingPhotos {
+      let pending: [(id: String, taken: Date)] = intake.map { ($0.id, $0.taken) }
+        + photoEvents.compactMap { event in
+          if case .photo(let photo) = event { return (photo.id, photo.taken) }
+          return nil
+        }
+        + (openPhotos + laterPhotos).map { ($0.id, $0.taken) }
+      for photo in pending { usedPhotos.remove(photo.id) }
+      photosResumeFrom = min(pending.map(\.taken).min() ?? Date(), Date())
+    }
+    watchingPhotos = false
+    intakeTask?.cancel(); intakeTask = nil; intake = []; photoEvents = []
+    photoCheck?.cancel(); photoCheck = nil; photoTimer?.cancel(); photoTimer = nil
+    openPhotos = []; laterPhotos = []
+  }
+
+  private func startPhotoTimer(run: UUID) {
+    photoTimer?.cancel()
+    photoTimer = Task { [weak self] in
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .seconds(5))
+        guard let self, self.runID == run, self.photoScan, self.isCollecting else { return }
+        self.photoTick()
+      }
+    }
+  }
+  /// Says how photos reach the phone if none has arrived soon after Start, and solves after a long pause.
+  private func photoTick() {
+    let now = ProcessInfo.processInfo.systemUptime
+    if photosReceived == 0, !photoHintGiven, now - photoStart >= Self.photoHintAfter {
+      photoHintGiven = true
+      guide = "No photo has reached the phone yet. In the Meta AI app, turn on Auto-import, or open its gallery to import your photos."
+      say("No photos yet. Open Meta AI on your phone to import them.")
+    }
+    guard phase == .seeking, !photoBusy, now - lastActivity >= Self.photoIdleFinish else { return }
+    guard !pages.isEmpty || !openPhotos.isEmpty || !laterPhotos.isEmpty else {
+      pauseScanning("Paused after 10 minutes without a photo."); say("Scanning paused."); return
+    }
+    noteActivity(); say("No new photos for 10 minutes. Solving.")
+    finishAnyway = true; finishScanning()
   }
 
   // MARK: Solving
@@ -887,6 +1288,7 @@ final class AutoScanModel {
     if [.capturing, .checking].contains(phase) {
       finishRequested = true; guide = "Finishing after this photo is saved."; say("Finishing after this photo."); return
     }
+    if photoScan && phase == .seeking && !finishPhotoPages() { return }
     if phase == .seeking, captureMode == .frames, !imported, !pageFrames.isEmpty {
       // Save the page being scanned first; solving starts as soon as it is saved. A page not yet confirmed clear is
       // checked first, unless the wearer already heard it is unclear and gives 👍 again to solve anyway.
@@ -978,6 +1380,10 @@ final class AutoScanModel {
         // Say it now, not only after Finish. Hands-free, the page is asked for again once scanning is done.
         if fixing {
           solveStatus = message; say(message + " I'll ask for it next.")
+        } else if isCollecting && photoScan {
+          // Glasses photos: the PDF lists that page for review; it can be retaken from the phone afterwards.
+          solveStatus = message + " It's marked for review in the PDF; retake it from the phone afterwards."
+          say(message + " It will be marked for review.")
         } else if isCollecting {
           solveStatus = message + (handsFree ? " I'll ask for it again when you finish." : " Retake it from the phone.")
           say(message + (handsFree ? " I'll ask for it again when you finish." : ""))
@@ -1011,7 +1417,10 @@ final class AutoScanModel {
   private func advanceFinish() {
     guard phase == .solving, let configuration = solveSetup else { return }
     // Hands-free: ask again for a page the AI could not read right away, while the other pages keep solving.
-    if handsFree, let target = nextFixTarget() { startFix(at: target); return }
+    if handsFree, let target = nextFixTarget() {
+      // Glasses photos: an unreadable page goes into the PDF for review instead of a camera retake.
+      if photoScan { leftOut.formUnion(unclear.keys) } else { startFix(at: target); return }
+    }
     let keys = PagePlan.keys(for: pages.map(\.id), final: true, setup: configuration.setup)
     let solving = keys.filter { !leftOut.contains($0.page) }
     guard !solving.isEmpty else {
@@ -1029,7 +1438,7 @@ final class AutoScanModel {
       let detail = jobErrors[failed[0]] ?? ""
       let summary = failed.count == 1 ? detail : "\(names.joined(separator: ", ")) could not be solved. \(detail)"
       endBackgroundWork()
-      if handsFree {
+      if handsFree && !photoScan {
         standby(summary + " Solved pages are kept. Give a thumbs-up to try again.",
           otherwise: summary + " Solved pages are kept; tap Done to retry only the failed pages.")
         return
@@ -1133,6 +1542,7 @@ final class AutoScanModel {
         result = saved; phase = .finished
         let review = solution.problems.contains { $0.reviewNote?.hasPrefix("NEEDS REVIEW") == true }
         guide = review ? "Your PDF is ready. Check items marked NEEDS REVIEW." : "Your PDF is ready."
+        guide += " Files › On My iPhone › Glasses Solver › Solutions › \(saved.pdf.deletingLastPathComponent().lastPathComponent)."
         if !missing.isEmpty { guide += " Left out unreadable: \(missing.joined(separator: ", "))." }
         // Keep the pages and cached answers so one page can be retaken and the PDF rebuilt quickly.
         // The next Start (or a new photo) begins a fresh packet; the PDF folder holds every original.
@@ -1150,6 +1560,7 @@ final class AutoScanModel {
     jobs = [:]; results = [:]; jobErrors = [:]; claimed = []; unclear = [:]; leftOut = []; solveSetup = nil; planFinal = false
     packetSolved = false
     pages = []; thumbnails = [:]; pageStates = [:]; solveStatus = ""
+    usedPhotos = []; photosResumeFrom = nil
     let solver = self.solver
     Task { await solver.forget(keeping: []) }
   }
@@ -1158,7 +1569,7 @@ final class AutoScanModel {
 
   private func fail(_ message: String) {
     runID = UUID(); worker?.cancel(); analysisTask?.cancel(); analysisTask = nil; cancelPreviewRestart(); cameraProblem = nil
-    camera.stop(); voice.stopCommands(); gate.reset(); restoreIdleTimer(); fixing = false
+    camera.stop(); stopPhotos(); voice.stopCommands(); gate.reset(); restoreIdleTimer(); fixing = false
     phase = .failed; guide = message; progress = 0; say("Paused. " + message)
     refreshPageStates()
   }

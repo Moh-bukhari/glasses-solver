@@ -49,7 +49,7 @@ enum SolverKeychain {
   static func migrateDefaults() {
     let defaults = UserDefaults.standard
     let version = defaults.integer(forKey: "settingsVersion")
-    guard version < 5 else { return }
+    guard version < 6 else { return }
     if version < 2 {
       if defaults.string(forKey: "solverModel") == "gpt-5.4" { defaults.set(SolverConfiguration.openAIDefault, forKey: "solverModel") }
       if defaults.string(forKey: "claudeModel") == "claude-sonnet-5-5" { defaults.set(SolverConfiguration.claudeDefault, forKey: "claudeModel") }
@@ -67,13 +67,17 @@ enum SolverKeychain {
       // 2.4 checks each page while scanning and solves everything after the thumbs-up.
       defaults.set(false, forKey: "solveWhileScanning")
     }
-    // 2.5: the user asked for the best accuracy and speed from either provider, whatever the cost. Claude Opus 5.5
-    // reads printed values best, so Claude solves when its key is saved; GPT-6 Astra is OpenAI's best reader.
-    if defaults.string(forKey: "solverModel") == "gpt-6.1-sol" { defaults.set(SolverConfiguration.openAIDefault, forKey: "solverModel") }
-    if !read(.claude).isEmpty && defaults.string(forKey: "solverMode") != SolverMode.both.rawValue {
-      defaults.set(SolverMode.claude.rawValue, forKey: "solverMode")
+    if version < 5 {
+      // 2.5: the user asked for the best accuracy and speed from either provider, whatever the cost. Claude Opus 5.5
+      // reads printed values best, so Claude solves when its key is saved; GPT-6 Astra is OpenAI's best reader.
+      if defaults.string(forKey: "solverModel") == "gpt-6.1-sol" { defaults.set(SolverConfiguration.openAIDefault, forKey: "solverModel") }
+      if !read(.claude).isEmpty && defaults.string(forKey: "solverMode") != SolverMode.both.rawValue {
+        defaults.set(SolverMode.claude.rawValue, forKey: "solverMode")
+      }
     }
-    defaults.set(5, forKey: "settingsVersion")
+    // 2.6: the glasses' video is too blurry for small print, so pages are photographed with the capture button.
+    defaults.set(AutoScanModel.CaptureMode.buttonPhotos.rawValue, forKey: "captureMode")
+    defaults.set(6, forKey: "settingsVersion")
   }
 }
 
@@ -98,7 +102,7 @@ struct SolverSettingsView: View {
   @AppStorage("solveWhileScanning") private var solveWhileScanning = false
   @AppStorage("checkPages") private var checkPages = true
   @AppStorage("fastProcessing") private var fastProcessing = true
-  @AppStorage("captureMode") private var captureMode = AutoScanModel.CaptureMode.frames.rawValue
+  @AppStorage("captureMode") private var captureMode = AutoScanModel.CaptureMode.buttonPhotos.rawValue
   @State private var error: String?
   var body: some View {
     NavigationStack {
@@ -116,21 +120,24 @@ struct SolverSettingsView: View {
             : "Standard speed and price.").font(.footnote)
           Toggle("Check each page before the next", isOn: $checkPages)
           Text(checkPages
-            ? "While you look at a page, its photos are checked by the most accurate reader you have a key for (Claude Opus 5.5, else GPT-6 Astra) that every question can be read. You hear \"Page 1 is clear\" before you turn the page, or what to show again."
-            : "Pages are saved once nothing new appears for a moment, without an AI check.").font(.footnote)
-          Toggle("Solve pages while scanning", isOn: $solveWhileScanning)
+            ? "Each page's photos are checked by the most accurate reader you have a key for (Claude Opus 5.5, else GPT-6 Astra) that every question can be read. You hear \"Page 1 is clear\" before you move on, or what to photograph again."
+            : "No AI check: with glasses photos each photo is saved as its own page; with live frames a page is saved once nothing new appears.").font(.footnote)
+          Toggle("Solve pages while scanning (live frames)", isOn: $solveWhileScanning)
           Text(solveWhileScanning
             ? "Each page is uploaded and solved as soon as the next page is saved, so the PDF is ready moments after you finish."
-            : "Pages are solved after your thumbs-up, all at once.").font(.footnote)
+            : "Live-frame pages are solved after your thumbs-up, all at once. Glasses photos are always solved as you go.").font(.footnote)
         }
         Section("Capture") {
           Picker("Photos", selection: $captureMode) {
-            Text("Live frames · fast").tag(AutoScanModel.CaptureMode.frames.rawValue)
-            Text("Full-resolution photo").tag(AutoScanModel.CaptureMode.photos.rawValue)
+            Text("Glasses photos · capture button").tag(AutoScanModel.CaptureMode.buttonPhotos.rawValue)
+            Text("Live frames · hands-free").tag(AutoScanModel.CaptureMode.frames.rawValue)
+            Text("Full-resolution photo · stream").tag(AutoScanModel.CaptureMode.photos.rawValue)
           }
-          Text(captureMode == AutoScanModel.CaptureMode.photos.rawValue
-            ? "One 12-megapixel photo per page. Sharper for a whole page at arm's length, but each photo pauses the camera and takes several seconds."
-            : "Keeps the clearest moments of the live camera, several per page, with no pause between photos. Look closely at each part of the page, top to bottom.").font(.footnote)
+          Text(captureMode == AutoScanModel.CaptureMode.buttonPhotos.rawValue
+            ? "Recommended: you take each photo with the capture button, the sharpest the glasses can take. Meta AI imports it into Photos (turn on Auto-import in Meta AI, and give this app Full Access to Photos), and it is checked as soon as it arrives."
+            : captureMode == AutoScanModel.CaptureMode.photos.rawValue
+            ? "One 12-megapixel photo per page through the camera stream. Each photo pauses the camera and takes several seconds."
+            : "Keeps the clearest moments of the live video, several per page. Hands-free, but the video is much blurrier than photos.").font(.footnote)
         }
         // Both keys are always editable: page checks use Claude whenever its key is saved, whichever provider solves.
         Section {

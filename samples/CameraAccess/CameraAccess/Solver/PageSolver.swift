@@ -185,6 +185,8 @@ struct PageCheck: Codable, Sendable, Equatable {
   /// 1-based photos too blurred, dark, distant or covered to add anything, and photos of a different sheet.
   let blurry: [Int]
   let otherSheet: [Int]
+  /// Photos of the EARLIER sheet (the page before, already saved) when one was sent for comparison.
+  var earlierSheet: [Int] = []
   /// Every question, subpart, figure and table on the sheet, with its given values ("?" for any uncertain character).
   let questions: [Item]
   /// Parts of the sheet no photo shows; empty when none.
@@ -201,11 +203,17 @@ struct PageCheck: Codable, Sendable, Equatable {
       return value.isEmpty || ["none", "none.", "n/a", "-", "—", "nothing", "no"].contains(value)
     }
     let photos = 1...max(1, count)
-    let dropped = Array(Set((blurry + otherSheet).filter { photos.contains($0) })).sorted()
+    func valid(_ numbers: [Int]) -> [Int] { Array(Set(numbers.filter { photos.contains($0) })).sorted() }
+    // A photo listed twice counts once: the page before first, then another sheet, then blurry.
+    let earlier = valid(earlierSheet), other = valid(otherSheet).filter { !earlier.contains($0) }
+    let blurred = valid(blurry).filter { !earlier.contains($0) && !other.contains($0) }
+    let dropped = valid(blurry + otherSheet + earlierSheet)
     let wrongSheet = Set(otherSheet.filter { photos.contains($0) }).count == count
     let clear = verdict.trimmed.lowercased() == "solvable" && !questions.isEmpty
       && questions.allSatisfy { blank($0.unclear) && !$0.read.contains("?") } && blank(unseen) && dropped.count < count
-    guard !clear else { return PageVerdict(clear: true, say: "", dropped: dropped) }
+    guard !clear else {
+      return PageVerdict(clear: true, say: "", dropped: dropped, blurry: blurred, otherSheet: other, earlierSheet: earlier)
+    }
     let unreadable = questions.contains { !blank($0.unclear) || $0.read.contains("?") }
     let words = voice.split(whereSeparator: \.isWhitespace).count
     let say: String
@@ -216,7 +224,19 @@ struct PageCheck: Codable, Sendable, Equatable {
     else { say = "Look at the whole sheet again, closer and steadier." }
     // Everything shown so far is readable; the wearer just hasn't shown the whole sheet yet.
     let notShownYet = !questions.isEmpty && !unreadable && !blank(unseen) && !wrongSheet
-    return PageVerdict(clear: false, say: say, dropped: dropped, wrongSheet: wrongSheet, notShownYet: notShownYet)
+    return PageVerdict(clear: false, say: say, dropped: dropped, wrongSheet: wrongSheet, notShownYet: notShownYet,
+      blurry: blurred, otherSheet: other, earlierSheet: earlier)
+  }
+}
+extension PageCheck {
+  /// `earlierSheet` is only asked for with an EARLIER photo; an answer without it still decodes.
+  init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.init(blurry: try container.decode([Int].self, forKey: .blurry),
+      otherSheet: try container.decode([Int].self, forKey: .otherSheet),
+      earlierSheet: try container.decodeIfPresent([Int].self, forKey: .earlierSheet) ?? [],
+      questions: try container.decode([Item].self, forKey: .questions), unseen: try container.decode(String.self, forKey: .unseen),
+      verdict: try container.decode(String.self, forKey: .verdict), voice: try container.decode(String.self, forKey: .voice))
   }
 }
 
@@ -230,12 +250,25 @@ struct PageVerdict: Sendable, Equatable {
   var wrongSheet = false
   /// What the photos show is readable, but part of the sheet has not been shown yet (the wearer may still be scanning).
   var notShownYet = false
+  /// The dropped photos by reason (1-based): unreadable, another sheet, or the page before (EARLIER) again.
+  var blurry: [Int] = []
+  var otherSheet: [Int] = []
+  var earlierSheet: [Int] = []
+}
+
+/// What a page check compares the photos with.
+struct PageCheckContext: Sendable, Equatable {
+  /// An earlier photo of the page being retaken: the photos must show that same sheet.
+  var reference: Data? = nil
+  /// A photo of the page before, already saved: photos of it again are listed apart, never taken for this page.
+  var earlier: Data? = nil
+  /// The wearer takes each photo with the glasses' capture button, so spoken advice says what to photograph.
+  var buttonPhotos = false
 }
 
 protocol PageChecking: Sendable {
-  /// `photos` are one sheet's JPEG frames in capture order; `page` is its number in the packet. `reference` is an earlier
-  /// photo of the page being retaken: the photos must show that same sheet.
-  func check(_ photos: [Data], page: Int, reference: Data?, configuration: SolverConfiguration) async throws -> PageVerdict
+  /// `photos` are one sheet's JPEG photos in capture order; `page` is its number in the packet.
+  func check(_ photos: [Data], page: Int, context: PageCheckContext, configuration: SolverConfiguration) async throws -> PageVerdict
 }
 
 /// Asks the best available reader (see `SolverConfiguration.checkCredential`) whether a sheet's photos are clear enough to
@@ -252,14 +285,26 @@ actor PageChecker: PageChecking {
   init(transport: any AITransport = SolverClient(), retryDelay: Duration = .seconds(1)) {
     self.transport = transport; self.retryDelay = retryDelay
   }
-  func check(_ photos: [Data], page: Int, reference: Data?, configuration: SolverConfiguration) async throws -> PageVerdict {
+  func check(_ photos: [Data], page: Int, context: PageCheckContext, configuration: SolverConfiguration) async throws -> PageVerdict {
     try configuration.validate()
     var labeled = photos.enumerated().map { AIPhoto(label: "Photo \($0.offset + 1) of \(photos.count):", jpeg: $0.element) }
-    var prompt = photos.count == 1 ? "Photo 1 shows one sheet, page \(page) of the packet. Check this sheet."
-      : "Photos 1 to \(photos.count) show one sheet, page \(page) of the packet, oldest first. The wearer is looking at photo \(photos.count) now. Check this sheet."
-    if let reference {
+    var prompt: String
+    if context.buttonPhotos {
+      prompt = (photos.count == 1 ? "Photo 1 was taken for page \(page) of the packet."
+        : "Photos 1 to \(photos.count) were taken for page \(page) of the packet, oldest first.")
+        + " Check this sheet. The wearer takes each photo with the capture button on the glasses: in voice, say what to"
+        + " photograph next, e.g. \"Take a closer photo of question 4(c).\" or \"Take a photo of the bottom of the sheet.\""
+    } else {
+      prompt = photos.count == 1 ? "Photo 1 shows one sheet, page \(page) of the packet. Check this sheet."
+        : "Photos 1 to \(photos.count) show one sheet, page \(page) of the packet, oldest first. The wearer is looking at photo \(photos.count) now. Check this sheet."
+    }
+    if let reference = context.reference {
       labeled.insert(AIPhoto(label: "REFERENCE: an earlier photo of page \(page), the sheet being retaken. It may be unclear.", jpeg: reference), at: 0)
       prompt += " The wearer is retaking page \(page): photos that do not show the REFERENCE sheet belong in otherSheet."
+    }
+    if let earlier = context.earlier {
+      labeled.insert(AIPhoto(label: "EARLIER: page \(page - 1), already done.", jpeg: earlier), at: 0)
+      prompt += " Photos that show the EARLIER sheet belong in earlierSheet; the sheet to check is the one in the first photo that does not show it."
     }
     var retried = false, lowered: SpeedTier?
     while true {

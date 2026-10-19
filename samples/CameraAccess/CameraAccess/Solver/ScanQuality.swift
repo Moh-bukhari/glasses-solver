@@ -175,6 +175,11 @@ protocol PageAnalyzing: Sendable {
   func prepare(_ data: Data) async throws -> PreparedPhoto
   /// Reads the text lines of a steady preview frame on the phone, for question numbers and telling views apart.
   func readText(_ image: CGImage) async throws -> FrameText
+  /// A hand command held up in a photo taken with the capture button (👍 solves, 👉 keeps the page), or nil for a page.
+  func photoGesture(_ jpeg: Data) async -> HandGesture?
+}
+extension PageAnalyzing {
+  func photoGesture(_ jpeg: Data) async -> HandGesture? { nil }
 }
 
 struct PreparedPhoto: @unchecked Sendable {
@@ -188,6 +193,12 @@ struct PreparedPhoto: @unchecked Sendable {
 
 actor PageAnalyzer: PageAnalyzing {
   private let gestures = HandGestureClassifier()
+  /// A command photo is taken on purpose with the hand close to the glasses, so the hand must fill more of the frame
+  /// than a gesture seen in the live view; a hand holding a sheet at the edge of a page photo is not a command.
+  private let photoGestures: HandGestureClassifier = {
+    var thresholds = HandGestureClassifier.Thresholds(); thresholds.minPalm = 0.2
+    return HandGestureClassifier(thresholds: thresholds)
+  }()
 
   func analyze(_ image: CGImage, still: Bool = false) throws -> PageSample {
     try analyze(image, still: still, referenceHeight: nil)
@@ -262,6 +273,13 @@ actor PageAnalyzer: PageAnalyzing {
       return ReadLine(text: best.string, confidence: Double(best.confidence), box: observation.boundingBox)
     }
     return FrameText(lines: lines)
+  }
+
+  func photoGesture(_ jpeg: Data) -> HandGesture? {
+    guard let image = Self.thumbnail(jpeg, maxPixel: 1280) else { return nil }
+    let hands = HandPoseVision.makeRequest()
+    guard (try? VNImageRequestHandler(cgImage: image, options: [:]).perform([hands])) != nil else { return nil }
+    return photoGestures.classify(HandPoseVision.poses(from: hands), imageWidth: image.width, imageHeight: image.height)
   }
 
   func prepare(_ data: Data) throws -> PreparedPhoto {

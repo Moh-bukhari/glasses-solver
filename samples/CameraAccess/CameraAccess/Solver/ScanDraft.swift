@@ -24,7 +24,8 @@ struct CapturedPage: Identifiable {
 struct ScanDraftStore {
   let directory: URL
   init(directory: URL? = nil) {
-    self.directory = directory ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    // Application Support, not Documents: pages in progress stay out of the Files app, which shows only finished folders.
+    self.directory = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
       .appendingPathComponent("ScanDraft", isDirectory: true)
   }
   private var manifest: URL { directory.appendingPathComponent("pages.json") }

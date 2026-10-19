@@ -360,7 +360,7 @@ struct SolverClient: AITransport {
     func object(_ properties: [String: Any]) -> [String: Any] {
       ["type": "object", "additionalProperties": false, "required": properties.keys.sorted(), "properties": properties]
     }
-    return object(["blurry": numbers, "otherSheet": numbers,
+    return object(["blurry": numbers, "earlierSheet": numbers, "otherSheet": numbers,
       "questions": ["type": "array", "items": object(["label": string, "read": string, "unclear": string])],
       "unseen": string, "verdict": ["type": "string", "enum": ["solvable", "retake"]], "voice": string])
   }
@@ -377,10 +377,12 @@ struct SolverClient: AITransport {
   Fill the fields in order:
   blurry: numbers of photos that add nothing because they are too blurred, dark, distant or covered to read any text
   that another photo does not show more clearly. Usually empty.
+  earlierSheet: numbers of photos that show the EARLIER sheet, when an EARLIER photo is given: a page the wearer already
+  finished. Empty when no EARLIER photo is given.
   otherSheet: numbers of photos that show a different sheet. When a REFERENCE photo is given, the sheet you check is the
-  REFERENCE sheet; otherwise it is the sheet in photo 1, even if later photos show another sheet (the wearer may have
-  turned the page too early). Compare question numbers, wording and layout, not the look of the paper. Ignore blurry
-  and otherSheet photos from here on.
+  REFERENCE sheet; otherwise it is the sheet in photo 1 (with an EARLIER photo: the first photo not in earlierSheet),
+  even if later photos show another sheet (the wearer may have turned the page too early). Compare question numbers,
+  wording and layout, not the look of the paper. Ignore blurry, earlierSheet and otherSheet photos from here on.
   questions: in printed order, every question and lettered or numbered subpart on the sheet, and every figure, graph or
   table they use.
     label: as printed, e.g. "3(b)", "Q4", "Figure 2"; for an unlabeled item, a few words such as "top problem".
@@ -399,7 +401,8 @@ struct SolverClient: AITransport {
   first (the printed label, or the top, middle or bottom of the sheet, the table, the graph), then one fix: look closer,
   hold still, move your hand away, tilt the sheet away from the light, find more light, or show the top or bottom of the
   sheet. Choose the fix that clears the most problems. Never mention photos, images or pixels; the wearer cannot see
-  them. If every photo shows a different sheet than the one you check, say "Turn to the right sheet."
+  them. Only when told the wearer takes the photos with the capture button, say what to photograph instead. If every
+  photo shows a different sheet than the one you check, say "Turn to the right sheet."
   Examples: "Look closer at question 4(c), and hold still." "Show the bottom of the sheet." "Move your hand off
   question 2." "Tilt the sheet away from the light over the table." "Find more light; the whole sheet is too dark."
   Return only the JSON.

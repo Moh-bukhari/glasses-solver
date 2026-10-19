@@ -37,16 +37,50 @@ protocol SolutionSaving {
   func save(page: SolvedPage, sources: [[URL]], names: [String]) async throws -> SavedSolution
 }
 
+/// What the app remembers about a saved packet, kept hidden in its folder.
+private struct StoredSolution: Codable {
+  let id: UUID
+  let date: Date
+  let firstPhoto: String
+  let solution: SolvedPage
+}
+
+/// One folder per packet in Files › On My iPhone › Glasses Solver › Solutions, named by date and title, holding
+/// Solutions.pdf and every page photo ("Page 1.jpg", "Page 2 (1).jpg", …).
 @MainActor
 struct SolutionStore: SolutionSaving {
-  static var directory: URL {
-    FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Solutions", isDirectory: true)
+  static var documents: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
+  static var directory: URL { documents.appendingPathComponent("Solutions", isDirectory: true) }
+  static let record = ".solution.json"
+
+  /// 2.6 starts over, as the wearer asked: earlier PDFs move to "Old solutions" (still in Files, no longer listed in the
+  /// app) and the old in-progress pages are cleared. Runs once.
+  static func startFresh() {
+    let defaults = UserDefaults.standard
+    guard !defaults.bool(forKey: "startedFresh26") else { return }
+    defaults.set(true, forKey: "startedFresh26")
+    let files = FileManager.default
+    if let old = try? files.contentsOfDirectory(atPath: directory.path), !old.isEmpty {
+      let archive = documents.appendingPathComponent("Old solutions", isDirectory: true)
+      if files.fileExists(atPath: archive.path) {
+        for name in old { try? files.moveItem(at: directory.appendingPathComponent(name), to: archive.appendingPathComponent(name)) }
+      } else {
+        try? files.moveItem(at: directory, to: archive)
+      }
+    }
+    // Drafts now live out of sight in Application Support; the old one in Documents showed up in Files.
+    try? files.removeItem(at: documents.appendingPathComponent("ScanDraft", isDirectory: true))
   }
+
   func save(page: SolvedPage, sources pages: [[URL]], names pageNames: [String]) async throws -> SavedSolution {
+    Self.startFresh()
     let id = UUID(), date = Date()
-    let folder = Self.directory.appendingPathComponent(id.uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
+    let existing = Set((try? FileManager.default.contentsOfDirectory(atPath: Self.directory.path)) ?? [])
+    let folderName = SolutionFolder.unique(SolutionFolder.name(title: MathText.readable(page.title), date: date), existing: existing)
+    let folder = Self.directory.appendingPathComponent(folderName, isDirectory: true)
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-    let pdf = folder.appendingPathComponent("Solution.pdf"), source = folder.appendingPathComponent("Paper.jpg")
+    let pdf = folder.appendingPathComponent(SolutionFolder.pdfName)
     // Flattened in page order; each photo is titled with its packet page so "source page N" can be found in the PDF.
     let sources = pages.flatMap { $0 }
     let titles = pages.enumerated().flatMap { page, frames in
@@ -54,9 +88,7 @@ struct SolutionStore: SolutionSaving {
       return frames.indices.map { "page \(page + 1)\(name)" + (frames.count == 1 ? "" : ", part \($0 + 1) of \(frames.count)") }
     }
     let names = pages.enumerated().flatMap { page, frames in
-      frames.indices.map { frame in
-        page == 0 && frame == 0 ? "Paper.jpg" : (frame == 0 ? "Paper-\(page + 1).jpg" : "Paper-\(page + 1)-\(frame + 1).jpg")
-      }
+      frames.indices.map { SolutionFolder.photoName(page: page + 1, photo: $0 + 1, of: frames.count) }
     }
     do {
       guard !sources.isEmpty else { throw SolverError.message("No source photos were saved.") }
@@ -80,22 +112,24 @@ struct SolutionStore: SolutionSaving {
       for (original, name) in zip(sources, names) {
         try FileManager.default.copyItem(at: original, to: folder.appendingPathComponent(name))
       }
-      try JSONEncoder().encode(page).write(to: folder.appendingPathComponent("Solution.json"), options: .atomic)
-      return SavedSolution(id: id, title: page.title, date: date, pdf: pdf, source: source)
+      let stored = StoredSolution(id: id, date: date, firstPhoto: names[0], solution: page)
+      try JSONEncoder().encode(stored).write(to: folder.appendingPathComponent(Self.record), options: .atomic)
+      return SavedSolution(id: id, title: page.title, date: date, pdf: pdf, source: folder.appendingPathComponent(names[0]))
     } catch {
       try? FileManager.default.removeItem(at: folder)
       throw error
     }
   }
   static func history() -> [SavedSolution] {
-    let folders = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.creationDateKey])) ?? []
+    startFresh()
+    let folders = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
     return folders.compactMap { folder in
-      guard let id = UUID(uuidString: folder.lastPathComponent),
-        let data = try? Data(contentsOf: folder.appendingPathComponent("Solution.json")),
-        let page = try? JSONDecoder().decode(SolvedPage.self, from: data),
-        FileManager.default.fileExists(atPath: folder.appendingPathComponent("Solution.pdf").path) else { return nil }
-      let date = (try? folder.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date.distantPast
-      return SavedSolution(id: id, title: page.title, date: date, pdf: folder.appendingPathComponent("Solution.pdf"), source: folder.appendingPathComponent("Paper.jpg"))
+      guard let data = try? Data(contentsOf: folder.appendingPathComponent(record)),
+        let stored = try? JSONDecoder().decode(StoredSolution.self, from: data) else { return nil }
+      let pdf = folder.appendingPathComponent(SolutionFolder.pdfName)
+      guard FileManager.default.fileExists(atPath: pdf.path) else { return nil }
+      return SavedSolution(id: stored.id, title: stored.solution.title, date: stored.date, pdf: pdf,
+        source: folder.appendingPathComponent(stored.firstPhoto))
     }.sorted { $0.date > $1.date }
   }
 }

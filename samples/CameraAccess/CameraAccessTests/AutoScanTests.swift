@@ -430,7 +430,7 @@ final class AutoScanTests: XCTestCase {
     voice.startHook = { await withCheckedContinuation { ready = $0 } }
     let model = AutoScanModel(camera: camera, analyzer: FakePageAnalyzer(sample: goodSample()),
       solver: FakePageSolver(), saver: FakeSolutionSaver(), draft: temporaryDraft(), voice: voice)
-    model.voiceCommands = true
+    model.voiceCommands = true; model.captureMode = .frames
     model.start(); await waitUntil { ready != nil }
     XCTAssertEqual(model.phase, .connecting); XCTAssertEqual(camera.starts, 0)
     XCTAssertTrue(voice.messages.isEmpty)
@@ -444,7 +444,7 @@ final class AutoScanTests: XCTestCase {
     voice.startHook = { await withCheckedContinuation { ready = $0 } }
     let model = AutoScanModel(camera: camera, analyzer: FakePageAnalyzer(sample: goodSample()),
       solver: FakePageSolver(), saver: FakeSolutionSaver(), draft: temporaryDraft(), voice: voice)
-    model.voiceCommands = true
+    model.voiceCommands = true; model.captureMode = .frames
     model.start(); await waitUntil { ready != nil }
     model.stop(); ready?.resume()
     await waitUntil { voice.startReturned }
@@ -1108,6 +1108,169 @@ final class AutoScanTests: XCTestCase {
     attachment.name = "batch-pdf-proof.pdf"; attachment.lifetime = .keepAlways; add(attachment)
   }
 
+  // MARK: Glasses photos (capture button)
+
+  private func photoModel(_ checker: FakePageChecker = FakePageChecker(), solver: FakePageSolver = FakePageSolver(),
+                          analyzer: FakePageAnalyzer? = nil) -> (AutoScanModel, FakePhotoSource, FakeScanVoice, FakeSolutionSaver) {
+    let photos = FakePhotoSource(), voice = FakeScanVoice(), saver = FakeSolutionSaver()
+    let model = makeModel(FakeScanCamera(data: Data()), analyzer ?? FakePageAnalyzer(sample: goodSample()), solver, saver,
+      capture: .buttonPhotos, voice: voice, checker: checker, solveWhileScanning: false, photos: photos)
+    return (model, photos, voice, saver)
+  }
+  func testButtonPhotosArePagedByChecksAndSolvedAsTheyGo() async throws {
+    let checker = FakePageChecker([.success(.unclear("Take a closer photo of question 2.")), .success(.clear), .success(.clear)])
+    let camera = FakeScanCamera(data: Data()), photos = FakePhotoSource(), voice = FakeScanVoice(), saver = FakeSolutionSaver()
+    let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), FakePageSolver(), saver, capture: .buttonPhotos,
+      voice: voice, checker: checker, solveWhileScanning: false, photos: photos)
+    model.start()
+    await waitUntil { model.phase == .seeking }
+    XCTAssertEqual(camera.starts, 0, "Button photos need no glasses camera stream.")
+    XCTAssertEqual(photos.starts, 1)
+    photos.take()
+    await waitUntil { model.guide.contains("closer photo") }
+    XCTAssertTrue(model.pages.isEmpty, "An unclear page is not saved.")
+    photos.take()
+    await waitUntil { model.pages.count == 1 }
+    XCTAssertEqual(model.pages.first?.frames.count, 2, "Every photo of the page is kept.")
+    XCTAssertTrue(voice.messages.contains { $0.hasPrefix("Page 1 is clear. Take page 2.") }, "\(voice.messages)")
+    photos.take()
+    await waitUntil { model.pages.count == 2 && model.solvedPages == 1 }
+    XCTAssertEqual(model.solvedPages, 1, "Page 1 is solved as soon as page 2 is saved, without the solve-while-scanning setting.")
+    let earlier = await checker.earlier, counts = await checker.photoCounts
+    XCTAssertEqual(earlier, [false, false, true], "Page 2 is checked against a photo of page 1.")
+    XCTAssertEqual(counts, [1, 2, 1])
+    model.finishScanning()
+    await waitUntil { model.phase == .finished }
+    XCTAssertEqual(saver.frameCounts, [2, 1])
+    XCTAssertEqual(photos.stops > 0, true, "Watching Photos stops once solving starts.")
+  }
+  func testAPhotoOfTheNextSheetWaitsUntilThePageIsClear() async throws {
+    let checker = FakePageChecker([.success(.unclear("Take a closer photo of the table.")),
+      .success(PageVerdict(clear: false, say: "Take a closer photo of the table.", dropped: [2], otherSheet: [2])),
+      .success(.clear), .success(.clear)])
+    let (model, photos, voice, _) = photoModel(checker)
+    model.start()
+    await waitUntil { model.phase == .seeking }
+    photos.take()
+    await waitUntil { model.guide.contains("table") }
+    photos.take() // page 2, too early
+    await waitUntil { model.guide.contains("isn't clear yet") }
+    XCTAssertTrue(model.pages.isEmpty)
+    XCTAssertTrue(voice.messages.contains { $0.contains("Go back to it") }, "\(voice.messages)")
+    photos.take() // a closer photo of page 1
+    await waitUntil { model.pages.count == 2 }
+    XCTAssertEqual(model.pages.map(\.frames.count), [2, 1], "The early photo of page 2 becomes page 2 once page 1 is clear.")
+    let counts = await checker.photoCounts
+    XCTAssertEqual(counts, [1, 2, 2, 1])
+  }
+  func testALatePhotoOfTheSavedPageDoesNotStartANewPage() async throws {
+    let checker = FakePageChecker([.success(.clear),
+      .success(PageVerdict(clear: false, say: "Turn to the right sheet.", dropped: [1], earlierSheet: [1])), .success(.clear)])
+    let (model, photos, voice, _) = photoModel(checker)
+    model.start()
+    await waitUntil { model.phase == .seeking }
+    photos.take()
+    await waitUntil { model.pages.count == 1 }
+    photos.take()
+    await waitUntil { voice.messages.contains { $0.hasPrefix("That's page 1 again") } }
+    XCTAssertEqual(model.pages.count, 1)
+    photos.take()
+    await waitUntil { model.pages.count == 2 }
+    XCTAssertEqual(model.pages.map(\.frames.count), [1, 1])
+  }
+  func testCommandPhotosKeepAPageAsItIsAndFinish() async throws {
+    let analyzer = FakePageAnalyzer(sample: goodSample())
+    await analyzer.setPhotoGesture(.thumbsRight, for: "photo-2"); await analyzer.setPhotoGesture(.thumbsUp, for: "photo-4")
+    let checker = FakePageChecker([.success(.unclear("Take a closer photo of question 3.")), .success(.clear)])
+    let (model, photos, _, saver) = photoModel(checker, analyzer: analyzer)
+    model.start()
+    await waitUntil { model.phase == .seeking }
+    photos.take()
+    await waitUntil { model.guide.contains("question 3") }
+    photos.take() // 👉: keep page 1 as it is
+    await waitUntil { model.pages.count == 1 }
+    photos.take()
+    await waitUntil { model.pages.count == 2 }
+    photos.take() // 👍: solve
+    await waitUntil { model.phase == .finished }
+    XCTAssertEqual(saver.frameCounts, [1, 1], "Command photos are never pages.")
+    let counts = await checker.photoCounts
+    XCTAssertEqual(counts, [1, 1])
+  }
+  func testFinishingOnAnUnclearPageWarnsOnceThenSolvesAnyway() async throws {
+    let checker = FakePageChecker([.success(.clear), .success(.unclear("Take a photo of the bottom of the sheet."))])
+    let (model, photos, voice, saver) = photoModel(checker)
+    model.start()
+    await waitUntil { model.phase == .seeking }
+    photos.take()
+    await waitUntil { model.pages.count == 1 }
+    photos.take()
+    await waitUntil { model.guide.contains("bottom") }
+    model.handle(.finish)
+    XCTAssertEqual(model.phase, .seeking)
+    XCTAssertTrue(voice.messages.last?.contains("solves anyway") == true, "\(voice.messages)")
+    model.handle(.finish)
+    await waitUntil { model.phase == .finished }
+    XCTAssertEqual(saver.frameCounts, [1, 1])
+  }
+  func testWithoutChecksEachButtonPhotoIsItsOwnPage() async throws {
+    let (model, photos, _, _) = photoModel()
+    model.checkPages = false
+    model.start()
+    await waitUntil { model.phase == .seeking }
+    photos.take(); photos.take(); photos.take()
+    await waitUntil { model.pages.count == 3 }
+    XCTAssertEqual(model.pages.map(\.frames.count), [1, 1, 1])
+  }
+  func testAContinuedScanNeverUsesAPhotoTwice() async throws {
+    let checker = FakePageChecker()
+    let (model, photos, _, _) = photoModel(checker)
+    model.start()
+    await waitUntil { model.phase == .seeking }
+    photos.take("a")
+    await waitUntil { model.pages.count == 1 }
+    model.pause()
+    model.start()
+    await waitUntil { model.phase == .seeking && photos.starts == 2 }
+    XCTAssertLessThanOrEqual(try XCTUnwrap(photos.since), Date().addingTimeInterval(-ButtonPhotos.lookback + 1))
+    photos.take("a") // the library shows it again: already on page 1
+    photos.take("b")
+    await waitUntil { model.pages.count == 2 }
+    let counts = await checker.photoCounts
+    XCTAssertEqual(counts, [1, 1])
+  }
+  func testPhotosNeedFullAccess() async throws {
+    let (model, photos, _, _) = photoModel()
+    photos.error = PhotoSourceError.limitedAccess
+    model.start()
+    await waitUntil { model.phase == .failed }
+    XCTAssertTrue(model.needsPhotoAccess)
+    XCTAssertTrue(model.guide.contains("Full Access"), model.guide)
+  }
+  func testAnUnreadableButtonPhotoPageIsMarkedForReviewInsteadOfACameraRetake() async throws {
+    let (model, photos, _, saver) = photoModel(solver: FakePageSolver(unreadableOnceOnPage: 1))
+    model.start()
+    await waitUntil { model.phase == .seeking }
+    photos.take()
+    await waitUntil { model.pages.count == 1 }
+    photos.take()
+    await waitUntil { model.pages.count == 2 }
+    model.finishScanning()
+    await waitUntil { model.phase == .finished }
+    XCTAssertTrue(saver.lastPage?.problems.contains { $0.problem.contains("could not be read") } == true)
+    XCTAssertTrue(model.guide.contains("Left out unreadable: Page 1"), model.guide)
+  }
+  func testSolutionFoldersAreNamedByDateAndTitle() {
+    let date = Date(timeIntervalSince1970: 1_792_000_000), utc = TimeZone(identifier: "UTC")!
+    XCTAssertEqual(SolutionFolder.name(title: "Physics: HW 3/4\nForces.", date: date, timeZone: utc),
+      "2026-10-14 17.46 Physics HW 3 4 Forces")
+    XCTAssertEqual(SolutionFolder.name(title: "  ", date: date, timeZone: utc), "2026-10-14 17.46")
+    XCTAssertEqual(SolutionFolder.unique("A", existing: ["A", "A 2"]), "A 3")
+    XCTAssertEqual(SolutionFolder.unique("B", existing: ["A"]), "B")
+    XCTAssertEqual(SolutionFolder.photoName(page: 2, photo: 1, of: 1), "Page 2.jpg")
+    XCTAssertEqual(SolutionFolder.photoName(page: 2, photo: 3, of: 3), "Page 2 (3).jpg")
+  }
+
   private func temporaryDraft() -> ScanDraftStore {
     ScanDraftStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent("draft-\(UUID())"))
   }
@@ -1115,9 +1278,10 @@ final class AutoScanTests: XCTestCase {
   /// Older flows solve while scanning, as 2.3 and earlier did by default; 2.4 solves after the thumbs-up.
   private func makeModel(_ camera: FakeScanCamera, _ analyzer: FakePageAnalyzer, _ solver: FakePageSolver, _ saver: FakeSolutionSaver,
                          capture: AutoScanModel.CaptureMode = .photos, voice: FakeScanVoice? = nil,
-                         checker: FakePageChecker = FakePageChecker(), solveWhileScanning: Bool = true) -> AutoScanModel {
+                         checker: FakePageChecker = FakePageChecker(), solveWhileScanning: Bool = true,
+                         photos: FakePhotoSource = FakePhotoSource()) -> AutoScanModel {
     let model = AutoScanModel(camera: camera, analyzer: analyzer, solver: solver, checker: checker, saver: saver,
-      draft: temporaryDraft(), voice: voice ?? FakeScanVoice(),
+      draft: temporaryDraft(), voice: voice ?? FakeScanVoice(), photos: photos,
       configurationProvider: { SolverConfiguration(openAIKey: "test-key-never-sent", openAIModel: "gpt-4.1") })
     model.voiceGuidance = voice != nil; model.captureMode = capture; model.solveWhileScanning = solveWhileScanning
     return model
@@ -1223,6 +1387,10 @@ private actor FakePageAnalyzer: PageAnalyzing {
     sample.contentFingerprint = Array(repeating: value, count: 256); sample.fingerprint = Array(repeating: value, count: 256)
   }
   func analyze(_ image: CGImage, still: Bool) async throws -> PageSample { sample }
+  /// Hand commands in button photos, by photo id (`FakePhotoSource` photos hold "jpeg-<id>").
+  private var photoGestures: [String: HandGesture] = [:]
+  func setPhotoGesture(_ gesture: HandGesture, for id: String) { photoGestures["jpeg-" + id] = gesture }
+  func photoGesture(_ jpeg: Data) async -> HandGesture? { photoGestures[String(decoding: jpeg, as: UTF8.self)] }
   func prepare(_ data: Data) async throws -> PreparedPhoto {
     var value = sample; value.gesture = nil
     if rejectFirstStill { value.issue = "Hold still; blurry photo."; rejectFirstStill = false }
@@ -1275,17 +1443,40 @@ private actor FakePageSolver: PageSolving {
 private actor FakePageChecker: PageChecking {
   private var verdicts: [Result<PageVerdict, any Error>]
   private(set) var photoCounts: [Int] = []
-  /// Whether each check got an earlier photo of the page being retaken.
+  /// Whether each check got an earlier photo of the page being retaken, and a photo of the page before.
   private(set) var references: [Bool] = []
+  private(set) var earlier: [Bool] = []
   init(_ verdicts: [Result<PageVerdict, any Error>] = []) { self.verdicts = verdicts }
-  func check(_ photos: [Data], page: Int, reference: Data?, configuration: SolverConfiguration) async throws -> PageVerdict {
-    photoCounts.append(photos.count); references.append(reference != nil)
+  func check(_ photos: [Data], page: Int, context: PageCheckContext, configuration: SolverConfiguration) async throws -> PageVerdict {
+    photoCounts.append(photos.count); references.append(context.reference != nil); earlier.append(context.earlier != nil)
     return verdicts.isEmpty ? .clear : try verdicts.removeFirst().get()
   }
 }
 private extension PageVerdict {
   static let clear = PageVerdict(clear: true, say: "", dropped: [])
   static func unclear(_ say: String) -> PageVerdict { PageVerdict(clear: false, say: say, dropped: []) }
+}
+
+/// The photo library as the glasses' photos reach it: `take` delivers a new photo now.
+@MainActor
+private final class FakePhotoSource: PhotoSource {
+  private var onPhoto: (@MainActor (IncomingPhoto) -> Void)?
+  var error: (any Error)?
+  private(set) var since: Date?
+  private(set) var starts = 0, stops = 0
+  private var count = 0
+  func start(since: Date, onPhoto: @escaping @MainActor (IncomingPhoto) -> Void) async throws {
+    starts += 1
+    if let error { throw error }
+    self.since = since; self.onPhoto = onPhoto
+  }
+  func stop() { stops += 1; onPhoto = nil }
+  func catchUp() {}
+  func take(_ name: String? = nil) {
+    count += 1
+    let id = name ?? "photo-\(count)"
+    onPhoto?(IncomingPhoto(id: id, jpeg: Data("jpeg-\(id)".utf8), taken: Date(), arrived: Date()))
+  }
 }
 
 @MainActor

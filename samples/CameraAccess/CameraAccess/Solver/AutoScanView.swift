@@ -23,7 +23,7 @@ struct AutoScanView: View {
   @AppStorage("glassesButtons") private var glassesButtons = false
   @AppStorage("solveWhileScanning") private var solveWhileScanning = false
   @AppStorage("checkPages") private var checkPages = true
-  @AppStorage("captureMode") private var captureMode = AutoScanModel.CaptureMode.frames.rawValue
+  @AppStorage("captureMode") private var captureMode = AutoScanModel.CaptureMode.buttonPhotos.rawValue
   @AppStorage("solverModeNotice") private var modeNotice = false
 
   var body: some View {
@@ -31,7 +31,9 @@ struct AutoScanView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 18) {
           Text("One button. Every page. One PDF.").font(.title2.bold())
-          Text("Tap Start, or run the Start Glasses Scan shortcut, and look closely at each part of a page, top to bottom. Each page is checked before you move on: you hear \"Page 1 is clear\", or what to show again. 👍 solves every page, 👉 keeps a page as it is, 👈 previous page.")
+          Text(buttonPhotos
+            ? "Tap Start, then take photos of page 1 with the capture button on your glasses. Each photo is checked as it arrives: you hear \"Page 1 is clear. Take page 2.\", or what to photograph again. Pages are solved as you go; a photo of a thumbs-up finishes, and one folder in Files holds the PDF and every photo."
+            : "Tap Start, or run the Start Glasses Scan shortcut, and look closely at each part of a page, top to bottom. Each page is checked before you move on: you hear \"Page 1 is clear\", or what to show again. 👍 solves every page, 👉 keeps a page as it is, 👈 previous page.")
             .foregroundStyle(.secondary)
           if modeNotice && !importOnly {
             HStack(alignment: .top) {
@@ -49,6 +51,14 @@ struct AutoScanView: View {
             ProgressView(value: model.progress).tint(.mint)
           } else if model.isRunning && model.phase != .awaitingNext { ProgressView().frame(maxWidth: .infinity) }
           if let importError { Text(importError).foregroundStyle(.red) }
+          if model.photoScan && model.isCollecting && !model.photoStatus.isEmpty {
+            Text(model.photoStatus).font(.footnote).foregroundStyle(.secondary)
+          }
+          if model.needsPhotoAccess && !model.isRunning {
+            Button("Open Settings to allow Photos access") {
+              if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+            }.buttonStyle(.bordered)
+          }
           if !model.voiceStatus.isEmpty && model.isCollecting {
             Text(model.voiceStatus).font(.footnote).foregroundStyle(.secondary)
           }
@@ -103,7 +113,7 @@ struct AutoScanView: View {
       .onChange(of: model.shortcutRequests) { _, _ in startFromShortcut() }
       .onChange(of: scenePhase) { _, value in
         if value == .background { model.backgrounded() }
-        if value == .active { startFromShortcut() }
+        if value == .active { model.foregrounded(); startFromShortcut() }
       }
       // Switching tabs stops the camera only; page solving and the PDF keep going.
       .onDisappear { model.viewDisappeared() }
@@ -116,12 +126,16 @@ struct AutoScanView: View {
         applySettings(); model.finishScanning()
         if model.needsKey { settings = true }
       } label: {
-        Label("Done · Solve \(model.pages.count) page\(model.pages.count == 1 ? "" : "s")", systemImage: "hand.thumbsup.fill")
+        let count = model.pages.count + (model.hasOpenPhotos ? 1 : 0)
+        Label("Done · Solve \(count) page\(count == 1 ? "" : "s")", systemImage: "hand.thumbsup.fill")
           .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
       }.buttonStyle(.borderedProminent).accessibilityIdentifier("finish_scanning")
     }
     if model.phase == .awaitingNext {
       Button("Next page now") { model.nextPage() }.buttonStyle(.bordered)
+    }
+    if model.photoScan && model.phase == .seeking && model.hasOpenPhotos {
+      Button("Keep this page as it is") { model.handle(.next) }.buttonStyle(.bordered)
     }
     if model.isRunning {
       if model.phase != .saving {
@@ -130,7 +144,8 @@ struct AutoScanView: View {
       }
     } else {
       if !importOnly && model.pages.count < AutoScanModel.maxPages {
-        if let wearablesVM, wearablesVM.registrationState != .registered {
+        // Glasses photos come through Meta AI's import, so they need no camera connection to the app.
+        if !buttonPhotos, let wearablesVM, wearablesVM.registrationState != .registered {
           Button("Connect glasses in Meta AI") { wearablesVM.connectGlasses() }.buttonStyle(.borderedProminent)
         } else {
           Button {
@@ -151,7 +166,21 @@ struct AutoScanView: View {
     }
   }
 
-  private var controlsHelp: some View {
+  @ViewBuilder private var controlsHelp: some View {
+    if buttonPhotos { photoHelp } else { gestureHelp }
+  }
+  private var photoHelp: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text("Glasses photos").font(.subheadline.bold())
+      Text("Before your first scan: in the Meta AI app, turn on Auto-import for your glasses' media (and Wi-Fi Aware if it is offered), and allow this app Full Access to Photos. Turn off any automatic crop or enhancement of photos.")
+      Text("Take one or more photos of each page with the capture button: a whole-page photo, plus close-ups of small print. Each photo reaches the phone through Meta AI, usually within seconds; the screen shows how long the last one took.")
+      Text("You hear \"Page 1 is clear. Take page 2.\" once every question can be read, or what to photograph again. A photo of page 2 taken too early waits until page 1 is clear.")
+      Text("Hold a fist with the thumb out close to the glasses and take a photo of it: 👍 thumb up solves everything; 👉 to your right keeps the page as it is; 👈 to your left retakes the page before.")
+      Text("Each page is solved as soon as the next one is saved, so the PDF is ready moments after you finish. It is saved with every photo in one folder: Files › On My iPhone › Glasses Solver › Solutions.")
+      Text("Keep the phone unlocked with this app open while scanning. If no photo arrives, open Meta AI's gallery once to import, then come back.")
+    }.font(.footnote).foregroundStyle(.secondary)
+  }
+  private var gestureHelp: some View {
     VStack(alignment: .leading, spacing: 6) {
       Text("Hand gestures").font(.subheadline.bold())
       Text("Make a fist with the thumb out and hold it about one second in front of the glasses.")
@@ -175,8 +204,9 @@ struct AutoScanView: View {
     model.cueVolume = Float(cueVolume); model.privateAudio = privateAudio
     model.gesturesEnabled = handGestures; model.glassesButtons = glassesButtons
     model.solveWhileScanning = solveWhileScanning; model.checkPages = checkPages
-    model.captureMode = AutoScanModel.CaptureMode(rawValue: captureMode) ?? .frames
+    model.captureMode = AutoScanModel.CaptureMode(rawValue: captureMode) ?? .buttonPhotos
   }
+  private var buttonPhotos: Bool { captureMode == AutoScanModel.CaptureMode.buttonPhotos.rawValue }
   private var phaseIcon: String {
     switch model.phase {
     case .finished: return "checkmark.circle.fill"
@@ -204,7 +234,11 @@ extension HandGesture {
 extension AutoScanModel {
   /// One coordinator owns the draft: the Auto Scan tab and the photo-import sheet share it, so solving that
   /// continues across tabs never races a second model over the same pages.
-  static let shared = AutoScanModel(camera: AutoScanCamera(wearables: Wearables.shared))
+  static let shared: AutoScanModel = {
+    // Before the draft loads: 2.6 starts with an empty packet and empty PDF list, and glasses photos by default.
+    SolutionStore.startFresh(); SolverKeychain.migrateDefaults()
+    return AutoScanModel(camera: AutoScanCamera(wearables: Wearables.shared))
+  }()
 }
 
 /// Reads the per-frame preview in its own view so the page queue does not re-render on every frame.
@@ -225,8 +259,10 @@ private struct ScanViewfinder: View {
           Image(uiImage: image).resizable().scaledToFit()
         } else {
           VStack(spacing: 12) {
-            Image(systemName: "doc.viewfinder").font(.system(size: 56, weight: .light))
-            Text("Close-up writing • Good light • Hold still").font(.caption)
+            Image(systemName: model.captureMode == .buttonPhotos ? "camera.fill" : "doc.viewfinder")
+              .font(.system(size: 56, weight: .light))
+            Text(model.captureMode == .buttonPhotos ? "Capture button • Good light • Whole page, then close-ups"
+              : "Close-up writing • Good light • Hold still").font(.caption)
           }.foregroundStyle(.white.opacity(0.75))
         }
         if model.phase == .capturing || model.phase == .checking {

@@ -75,6 +75,10 @@
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>Needed to connect to Meta AI Glasses</string>
 	<!-- End required section for Device Access Toolkit Apps -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Glasses Solver checks and solves the pages you photograph with your glasses' capture button, which the Meta AI app imports into Photos. Only photos taken during a scan are used.</string>
+	<key>PHPhotoLibraryPreventAutomaticLimitedAccessAlert</key>
+	<true/>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>This app needs access to save photos captured from your glasses.</string>
 	<key>NSCameraUsageDescription</key>
