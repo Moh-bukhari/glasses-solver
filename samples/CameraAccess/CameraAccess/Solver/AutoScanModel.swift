@@ -149,8 +149,9 @@ final class AutoScanModel {
   static let maxCheckRounds = 3
   /// An unclear page with nothing new for this long gets one spoken reminder of what to show, and that 👉 keeps it.
   static let remindAfter: TimeInterval = 12
-  /// A typical check answers in about 2-4 s; a slower one is retried once, then the page is saved without it.
-  static let checkTimeout: TimeInterval = 15
+  /// A typical check answers in a few seconds (Opus 5.5 may think briefly first); a slower one is retried once, then
+  /// the page is saved without it.
+  static let checkTimeout: TimeInterval = 20
   /// Views kept per page while it is checked; the AI may need a few close-ups of a crowded sheet.
   static let frameConfiguration: PageFrames.Configuration = { var value = PageFrames.Configuration(); value.maxFrames = 8; return value }()
 

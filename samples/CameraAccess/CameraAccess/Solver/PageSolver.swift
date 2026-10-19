@@ -238,13 +238,15 @@ protocol PageChecking: Sendable {
   func check(_ photos: [Data], page: Int, reference: Data?, configuration: SolverConfiguration) async throws -> PageVerdict
 }
 
-/// Asks the lead provider's fast model whether a sheet's photos are clear enough to solve, with one quick retry for an
-/// overload or a dropped connection. It skips the solve limiter: the wearer is waiting for it.
-/// If the account cannot use the fast model, the configured solve model checks pages for the rest of the session.
+/// Asks the best available reader (see `SolverConfiguration.checkCredential`) whether a sheet's photos are clear enough to
+/// solve, with one quick retry for an overload or a dropped connection. It skips the solve limiter: the wearer is
+/// waiting for it. A refused speed tier steps down at once; if the account cannot use the check model, that provider's
+/// configured model checks pages for the rest of the session.
 actor PageChecker: PageChecking {
   private let transport: any AITransport
   private let retryDelay: Duration
-  private var useSolveModel: Set<AIProvider> = []
+  private var useConfiguredModel: Set<AIProvider> = []
+  private var tiers = TierMemory()
   init(transport: any AITransport = SolverClient(), retryDelay: Duration = .seconds(1)) {
     self.transport = transport; self.retryDelay = retryDelay
   }
@@ -257,12 +259,13 @@ actor PageChecker: PageChecking {
       labeled.insert(AIPhoto(label: "REFERENCE: an earlier photo of page \(page), the sheet being retaken. It may be unclear.", jpeg: reference), at: 0)
       prompt += " The wearer is retaking page \(page): photos that do not show the REFERENCE sheet belong in otherSheet."
     }
-    var retried = false
+    var retried = false, lowered: SpeedTier?
     while true {
       try Task.checkCancellation()
-      let lead = configuration.lead
-      let credential = useSolveModel.contains(lead.provider) ? lead : configuration.checkCredential
-      let request = AIRequest(credential: credential, photos: labeled, prompt: prompt, tokenLimit: 8_000, kind: .check)
+      let preferred = configuration.checkCredential, configured = configuration.credential(preferred.provider)
+      let credential = useConfiguredModel.contains(preferred.provider) ? configured : preferred
+      let tier = lowered ?? tiers.tier(for: credential, fast: configuration.fastTiers)
+      let request = AIRequest(credential: credential, photos: labeled, prompt: prompt, tokenLimit: 8_000, kind: .check, tier: tier)
       do {
         let data = try await transport.send(request)
         guard let check = try? JSONDecoder().decode(PageCheck.self, from: data) else {
@@ -270,8 +273,9 @@ actor PageChecker: PageChecking {
         }
         return check.outcome(photos: photos.count)
       } catch {
-        if credential.model != lead.model, Self.modelUnavailable(error) {
-          useSolveModel.insert(lead.provider); continue
+        if let lower = tiers.stepDown(after: error, from: tier, credential: credential) { lowered = lower; continue }
+        if credential.model != configured.model, Self.modelUnavailable(error) {
+          useConfiguredModel.insert(preferred.provider); lowered = nil; continue
         }
         guard !retried, !Task.isCancelled, PageSolver.isTransient(error) else { throw error }
         retried = true
@@ -314,6 +318,7 @@ actor AsyncLimiter {
 
 actor PageSolver: PageSolving {
   private let transport: any AITransport
+  private var tiers = TierMemory()
   private let retryDelays: [Duration]
   private let limiter: AsyncLimiter
   private var uploads: [URL: Data] = [:]
@@ -328,27 +333,32 @@ actor PageSolver: PageSolving {
              progress: @escaping @Sendable (String) -> Void) async throws -> PageResult {
     try configuration.validate()
     let photos = try photos(for: job), task = Self.task(for: job), lead = configuration.lead
-    let mustSolve = job.mustSolve
+    let mustSolve = job.mustSolve, fast = configuration.fastTiers
     guard let peer = configuration.peer else {
-      return try await decoded(lead, photos: photos, prompt: task, page: job.number, name: job.title, mustSolve: mustSolve, progress: progress)
+      return try await decoded(lead, photos: photos, prompt: task, page: job.number, name: job.title, mustSolve: mustSolve,
+        fast: fast, progress: progress)
     }
-    async let first = decoded(lead, photos: photos, prompt: task, page: job.number, name: job.title, mustSolve: mustSolve, progress: progress)
-    async let second = decoded(peer, photos: photos, prompt: task, page: job.number, name: job.title, mustSolve: mustSolve, progress: progress)
+    async let first = decoded(lead, photos: photos, prompt: task, page: job.number, name: job.title, mustSolve: mustSolve,
+      fast: fast, progress: progress)
+    async let second = decoded(peer, photos: photos, prompt: task, page: job.number, name: job.title, mustSolve: mustSolve,
+      fast: fast, progress: progress)
     let (a, b) = try await (first, second)
     let required = Set((a.solutions + b.solutions).map(\.label))
     return try await decoded(lead, photos: photos, prompt: task + Self.reconcile(a, b, lead: lead.provider, peer: peer.provider),
-      page: job.number, name: job.title, mustCover: required, mustSolve: mustSolve, progress: progress)
+      page: job.number, name: job.title, mustCover: required, mustSolve: mustSolve, fast: fast, progress: progress)
   }
 
   /// One repair for malformed, truncated or self-inconsistent output. Never for refusals or unreadable pages.
   private func decoded(_ credential: AICredential, photos: [AIPhoto], prompt: String, page: Int, name: String, mustCover: Set<String> = [],
-                       mustSolve: [String] = [], progress: @escaping @Sendable (String) -> Void) async throws -> PageResult {
+                       mustSolve: [String] = [], fast: Bool, progress: @escaping @Sendable (String) -> Void) async throws -> PageResult {
     var correction = ""
     for attempt in 0..<2 {
       try Task.checkCancellation()
       do {
+        // High effort thinks longer, and thinking counts toward the output limit.
         let data = try await send(AIRequest(credential: credential, photos: photos, prompt: prompt + correction,
-          tokenLimit: SolverClient.outputLimit(attempt == 0 ? 32_000 : 48_000, model: credential.model)), name: name, progress: progress)
+          tokenLimit: SolverClient.outputLimit(attempt == 0 ? 64_000 : 96_000, model: credential.model)), fast: fast, name: name,
+          progress: progress)
         try Task.checkCancellation()
         let result: PageResult
         do { result = try JSONDecoder().decode(PageResult.self, from: data) }
@@ -367,8 +377,10 @@ actor PageSolver: PageSolving {
   }
 
   /// Bounded retries for overloads, rate limits and dropped connections only.
-  private func send(_ request: AIRequest, name: String, progress: @escaping @Sendable (String) -> Void) async throws -> Data {
-    var retries = 0
+  /// A refused speed tier is resent at once at the next lower tier; that does not count as a retry.
+  private func send(_ request: AIRequest, fast: Bool, name: String, progress: @escaping @Sendable (String) -> Void) async throws -> Data {
+    var request = request, retries = 0
+    request.tier = tiers.tier(for: request.credential, fast: fast)
     while true {
       try Task.checkCancellation()
       await limiter.acquire()
@@ -378,6 +390,7 @@ actor PageSolver: PageSolving {
         return data
       } catch {
         await limiter.release()
+        if let lower = tiers.stepDown(after: error, from: request.tier, credential: request.credential) { request.tier = lower; continue }
         guard retries < retryDelays.count, !Task.isCancelled, Self.isTransient(error) else { throw error }
         let delay = (error as? AIServiceError)?.retryAfter.map { Duration.seconds(min(max($0, 1), 20)) } ?? retryDelays[retries]
         retries += 1

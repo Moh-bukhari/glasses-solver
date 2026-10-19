@@ -1,8 +1,8 @@
-# Glasses Solver 2.4: page-by-page check, start from a shortcut, control everything with your thumb
+# Glasses Solver 2.5: best models, page-by-page check, start from a shortcut, control everything with your thumb
 
 You don't need to take out your phone during a scan. Start it with a shortcut (Action button, Back Tap, Control Center or Siri), scan page by page by looking at each page, and use three thumb gestures.
 
-2.4 checks every page before you move on. While you look at a page, its photos go to a fast AI model, which checks that every question on it can be read and solved. You hear "Page 1 is clear. Turn the page." If something can't be read, you hear what to show again ("Page 1: the bottom line is cut off; show it"), still at that page. After your thumbs-up, all pages are solved at once and the PDF opens, with typeset math. The app no longer tries to work out question numbers itself; the AI does that when it solves.
+2.5 uses the most accurate models with their paid fast modes. Claude Opus 5.5 reads printed numbers best and, in fast mode, answers quickest; GPT-6 Astra on OpenAI's Ultrafast is used if you only have an OpenAI key. Every page is checked before you move on: while you look at a page, its photos go to that model, which checks that every question on it can be read and solved. You hear "Page 1 is clear. Turn the page." If something can't be read, you hear what to show again ("Page 1: the bottom line is cut off; show it"), still at that page. After your thumbs-up, all pages are solved at once and the PDF opens, with typeset math. The app no longer tries to work out question numbers itself; the AI does that when it solves.
 
 The app keeps the clearest moments of the live camera, several per page, so there's no pause between photos. Directions play quietly through the glasses only. Voice commands and glasses buttons are off by default.
 
@@ -12,7 +12,8 @@ The app keeps the clearest moments of the live camera, several per page, so ther
 2. Download **GlassesSolver-IPA** under Artifacts and extract the ZIP.
 3. Use iloader to install `GlassesSolver-unsigned.ipa` over the existing app, with the same Apple account. Don't delete the old app first: saved pages, PDFs and API keys stay.
 4. Open **Auto Scan → Settings (gear)**.
-   - Choose **OpenAI** or **Claude** and check the API key. Defaults: **GPT-6.1 Sol** (`gpt-6.1-sol`) and **Claude Opus 5.5** (`claude-opus-5-5`).
+   - Enter your **Anthropic (Claude)** key for the best results, and your OpenAI key if you have one. With a Claude key saved, Claude solves and checks pages. Defaults: **Claude Opus 5.5** (`claude-opus-5-5`) and **GPT-6 Astra** (`gpt-6-astra`).
+   - **Fast processing** (on) uses Claude fast mode / OpenAI Ultrafast: the same answers sooner, at several times the price. If your account can't use them, the app falls back by itself.
    - Save.
 5. Make sure the glasses are connected in Meta AI and Developer Mode is on. Run one scan from the app first, so you can allow camera access on the phone.
 
@@ -72,7 +73,8 @@ Make a fist with your thumb straight out. Hold it in front of you, in the middle
 
 ## Speed options (Settings)
 
-- **Check each page before the next** (on): a fast AI model (Claude Haiku 5.5 or GPT-6 Luna, from the provider you chose) checks each page while you look at it. Each check costs a fraction of a cent.
+- **Check each page before the next** (on): Claude Opus 5.5 (or GPT-6 Astra without a Claude key) checks each page while you look at it.
+- **Fast processing** (on): paid speed lanes for checks and solving; turn off to pay standard prices.
 - **Solve pages while scanning** (off): turn it on to solve each page in the background once the next page is saved, so the PDF is ready sooner after your thumbs-up.
 - **Provider:** one provider is fastest. **Both · cross-check** solves every page with both providers and then reconciles the answers; it's slower and costs twice as much.
 

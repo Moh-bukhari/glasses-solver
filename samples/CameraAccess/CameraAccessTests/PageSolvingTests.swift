@@ -206,25 +206,33 @@ final class PageSolvingTests: XCTestCase {
   private func checkAnswer(_ verdict: String = "solvable") -> Data {
     Data(#"{"blurry":[],"otherSheet":[],"questions":[{"label":"1(a)","read":"m = 2 kg","unclear":""}],"unseen":"","verdict":"\#(verdict)","voice":""}"#.utf8)
   }
-  func testPageChecksUseTheFastModelAtLowEffortWithTheirOwnSchema() async throws {
+  func testPageChecksUseTheBestReaderAtLowEffortOnTheFastLaneWithTheirOwnSchema() async throws {
     let answer = checkAnswer()
-    for (mode, model) in [(SolverMode.openAI, "gpt-6-luna"), (.claude, "claude-haiku-5-5")] {
+    // A saved Claude key means Claude Opus 5.5 checks pages even when OpenAI solves; otherwise GPT-6 Astra.
+    let cases: [(SolverConfiguration, AIProvider, String, SpeedTier)] = [
+      (SolverConfiguration(mode: .openAI, openAIKey: "o", claudeKey: "c"), .claude, "claude-opus-5-5", .fast),
+      (SolverConfiguration(mode: .openAI, openAIKey: "o"), .openAI, "gpt-6-astra", .ultrafast),
+      (SolverConfiguration(mode: .claude, claudeKey: "c", fastTiers: false), .claude, "claude-opus-5-5", .standard)]
+    for (configuration, provider, model, tier) in cases {
       let transport = ScriptedTransport([.success(answer)])
-      let configuration = SolverConfiguration(mode: mode, openAIKey: "o", claudeKey: "c")
       let check = try await PageChecker(transport: transport).check([Data([1]), Data([2])], page: 3, reference: nil, configuration: configuration)
       XCTAssertTrue(check.clear)
       let requests = await transport.requests
       let request = try XCTUnwrap(requests.first)
       XCTAssertEqual(request.kind, .check); XCTAssertEqual(request.credential.model, model)
+      XCTAssertEqual(request.credential.provider, provider); XCTAssertEqual(request.tier, tier)
+      XCTAssertEqual(request.credential.key, provider == .claude ? "c" : "o")
       XCTAssertEqual(request.photos.map(\.label), ["Photo 1 of 2:", "Photo 2 of 2:"])
       XCTAssertTrue(request.prompt.contains("page 3") && request.prompt.contains("looking at photo 2 now"), request.prompt)
       let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(SolverClient.request(request).httpBody)) as? [String: Any])
-      if mode == .claude {
+      if provider == .claude {
         let output = try XCTUnwrap(body["output_config"] as? [String: Any])
         XCTAssertEqual(output["effort"] as? String, "low")
         XCTAssertEqual(body["system"] as? String, SolverClient.checkInstructions)
+        XCTAssertEqual(body["speed"] as? String, tier == .standard ? nil : "fast")
       } else {
         XCTAssertEqual((body["reasoning"] as? [String: Any])?["effort"] as? String, "low")
+        XCTAssertEqual(body["service_tier"] as? String, "ultrafast")
         let format = try XCTUnwrap((body["text"] as? [String: Any])?["format"] as? [String: Any])
         XCTAssertEqual(format["name"] as? String, "page_check"); XCTAssertEqual(format["strict"] as? Bool, true)
         let schema = try XCTUnwrap(format["schema"] as? [String: Any])
@@ -235,16 +243,16 @@ final class PageSolvingTests: XCTestCase {
       }
     }
   }
-  func testAPageCheckFallsBackToTheSolveModelWhenTheFastOneIsUnavailable() async throws {
+  func testAPageCheckFallsBackToTheConfiguredModelWhenTheCheckModelIsUnavailable() async throws {
     let answer = checkAnswer()
-    let missing = AIServiceError.http(provider: .openAI, status: 404, retryAfter: nil, detail: "The model `gpt-6-luna` does not exist")
+    let missing = AIServiceError.http(provider: .openAI, status: 404, retryAfter: nil, detail: "The model `gpt-6-astra` does not exist")
     let transport = ScriptedTransport([.failure(missing), .success(answer), .success(answer)])
     let checker = PageChecker(transport: transport, retryDelay: .milliseconds(1))
-    let configuration = SolverConfiguration(openAIKey: "o")
+    let configuration = SolverConfiguration(openAIKey: "o", openAIModel: "gpt-6.1-sol")
     _ = try await checker.check([Data([1])], page: 1, reference: nil, configuration: configuration)
     _ = try await checker.check([Data([1])], page: 2, reference: Data([9]), configuration: configuration)
     let requests = await transport.requests
-    XCTAssertEqual(requests.map(\.credential.model), ["gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-sol"], "Remembered for the rest of the session.")
+    XCTAssertEqual(requests.map(\.credential.model), ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-sol"], "Remembered for the rest of the session.")
     XCTAssertTrue(requests[2].photos[0].label.hasPrefix("REFERENCE: an earlier photo of page 2"), requests[2].photos[0].label)
     XCTAssertEqual(requests[2].photos[1].label, "Photo 1 of 1:")
     XCTAssertTrue(requests[2].prompt.contains("retaking page 2"))
@@ -252,7 +260,29 @@ final class PageSolvingTests: XCTestCase {
     do { _ = try await PageChecker(transport: denied).check([Data([1])], page: 1, reference: nil, configuration: configuration); XCTFail("A bad key is not a model problem") }
     catch { XCTAssertEqual((error as? AIServiceError)?.retryAfter, nil) }
     let deniedModels = await denied.requests.map(\.credential.model)
-    XCTAssertEqual(deniedModels, ["gpt-6-luna"])
+    XCTAssertEqual(deniedModels, ["gpt-6-astra"])
+  }
+  func testARefusedSpeedLaneStepsDownAtOnceAndIsRemembered() async throws {
+    let refused = AIServiceError.http(provider: .openAI, status: 400, retryAfter: nil, detail: "Invalid service_tier argument")
+    let transport = ScriptedTransport([.failure(refused), .success(valid()), .success(valid())])
+    let solver = fastSolver(transport), configuration = SolverConfiguration(openAIKey: "o")
+    _ = try await solver.solve(try pageJob(), configuration: configuration, progress: { _ in })
+    _ = try await solver.solve(try pageJob(), configuration: configuration, progress: { _ in })
+    var tiers = await transport.requests.map(\.tier)
+    XCTAssertEqual(tiers, [.ultrafast, .fast, .fast], "Not allowed: Fast is used from then on.")
+    // Claude fast mode with no capacity: resend at standard speed right away, and stop asking after twice.
+    let busy = AIServiceError.http(provider: .claude, status: 429, retryAfter: 20, detail: "rate_limit_error")
+    let claude = ScriptedTransport([.failure(busy), .success(valid()), .failure(busy), .success(valid()), .success(valid())])
+    let claudeSolver = fastSolver(claude), claudeOnly = SolverConfiguration(mode: .claude, claudeKey: "c")
+    let start = ContinuousClock.now
+    for _ in 0..<3 { _ = try await claudeSolver.solve(try pageJob(), configuration: claudeOnly, progress: { _ in }) }
+    XCTAssertLessThan(ContinuousClock.now - start, .seconds(5), "A busy fast lane never waits out retry-after.")
+    tiers = await claude.requests.map(\.tier)
+    XCTAssertEqual(tiers, [.fast, .standard, .fast, .standard, .standard])
+    var parser = StreamParser(provider: .openAI)
+    XCTAssertThrowsError(try parser.consume(#"data: {"type":"error","code":null,"param":"service_tier","message":"Invalid service_tier argument"}"#)) {
+      guard case .http(_, 400, _, _)? = $0 as? AIServiceError else { return XCTFail("\($0)") }
+    }
   }
   func testAPageCheckVerdictMustAgreeWithItsEvidence() {
     func item(_ label: String, read: String = "", unclear: String = "") -> PageCheck.Item { .init(label: label, read: read, unclear: unclear) }
@@ -283,6 +313,8 @@ final class PageSolvingTests: XCTestCase {
       let model = provider == .claude ? SolverConfiguration.claudeDefault : SolverConfiguration.openAIDefault
       let credential = AICredential(provider: provider, key: provider == .claude ? "claude-secret-fixture" : "openai-secret-fixture", model: model)
       let request = try SolverClient.request(AIRequest(credential: credential, photos: [photo], prompt: "Solve", tokenLimit: 32_000))
+      let fastBody = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(SolverClient.request(AIRequest(credential: credential,
+        photos: [photo], prompt: "Solve", tokenLimit: 32_000, tier: SpeedTier.best(provider, model: model))).httpBody)) as? [String: Any])
       let data = try XCTUnwrap(request.httpBody), body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
       let text = String(decoding: data, as: UTF8.self)
       XCTAssertFalse(text.contains("secret-fixture"))
@@ -296,16 +328,18 @@ final class PageSolvingTests: XCTestCase {
         XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
         XCTAssertEqual(request.value(forHTTPHeaderField: "anthropic-version"), "2023-06-01")
         let output = try XCTUnwrap(body["output_config"] as? [String: Any])
-        XCTAssertEqual(output["effort"] as? String, "medium"); XCTAssertNotNil(output["format"])
+        XCTAssertEqual(output["effort"] as? String, "high"); XCTAssertNotNil(output["format"])
+        XCTAssertNil(body["speed"]); XCTAssertEqual(fastBody["speed"] as? String, "fast")
         XCTAssertEqual(body["max_tokens"] as? Int, 32_000)
         XCTAssertTrue(text.contains("media_type"))
       } else {
-        XCTAssertEqual(model, "gpt-6.1-sol")
+        XCTAssertEqual(model, "gpt-6-astra")
+        XCTAssertNil(body["service_tier"]); XCTAssertEqual(fastBody["service_tier"] as? String, "ultrafast")
         XCTAssertEqual(request.url?.host, "api.openai.com")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer " + credential.key)
         XCTAssertNil(request.value(forHTTPHeaderField: "x-api-key"))
         XCTAssertEqual(body["store"] as? Bool, false)
-        XCTAssertEqual((body["reasoning"] as? [String: Any])?["effort"] as? String, "medium")
+        XCTAssertEqual((body["reasoning"] as? [String: Any])?["effort"] as? String, "high")
         XCTAssertEqual(body["max_output_tokens"] as? Int, 32_000)
         let format = try XCTUnwrap((body["text"] as? [String: Any])?["format"] as? [String: Any])
         XCTAssertEqual(format["strict"] as? Bool, true)
@@ -349,9 +383,10 @@ final class PageSolvingTests: XCTestCase {
       do { _ = try await fastSolver(transport).solve(job, configuration: openAI(), progress: { _ in }); XCTFail("Must not retry \(error)") } catch {}
       count = await transport.requests.count; XCTAssertEqual(count, 1)
     }
-    let busy = ScriptedTransport(Array(repeating: .failure(AIServiceError.http(provider: .openAI, status: 529, retryAfter: nil, detail: "")), count: 5))
+    let busy = ScriptedTransport(Array(repeating: .failure(AIServiceError.http(provider: .openAI, status: 529, retryAfter: nil, detail: "")), count: 7))
     do { _ = try await fastSolver(busy).solve(job, configuration: openAI(), progress: { _ in }); XCTFail("Retries are bounded") } catch {}
-    count = await busy.requests.count; XCTAssertEqual(count, 3, "One attempt plus at most two retries.")
+    let tiers = await busy.requests.map(\.tier)
+    XCTAssertEqual(tiers, [.ultrafast, .fast, .standard, .standard, .standard], "Each speed lane once, then at most two retries.")
   }
   func testIncompleteChecklistGetsOneRepairAndUnreadablePagesNone() async throws {
     let job = try pageJob()
@@ -360,7 +395,7 @@ final class PageSolvingTests: XCTestCase {
     _ = try await fastSolver(repaired).solve(job, configuration: openAI(), progress: { _ in })
     let prompts = await repaired.requests.map(\.prompt)
     XCTAssertEqual(prompts.count, 2); XCTAssertTrue(prompts[1].contains("REPAIR REQUIRED") && prompts[1].contains("1(b)"))
-    let tokens = await repaired.requests.map(\.tokenLimit); XCTAssertEqual(tokens, [32_000, 48_000])
+    let tokens = await repaired.requests.map(\.tokenLimit); XCTAssertEqual(tokens, [64_000, 96_000], "High effort needs room to think.")
 
     let stillMissing = ScriptedTransport([.success(missing), .success(missing), .success(valid())])
     do { _ = try await fastSolver(stillMissing).solve(job, configuration: openAI(), progress: { _ in }); XCTFail("Only one repair") } catch {}
@@ -444,7 +479,7 @@ final class PageSolvingTests: XCTestCase {
     SolverKeychain.migrateDefaults()
     XCTAssertFalse(defaults.bool(forKey: "voiceCommands"), "2.0 is controlled without voice; the microphone stays off.")
     XCTAssertTrue(defaults.bool(forKey: "solverModeNotice"), "Moving off cross-check is announced once.")
-    XCTAssertEqual(defaults.string(forKey: "solverModel"), "gpt-6.1-sol")
+    XCTAssertEqual(defaults.string(forKey: "solverModel"), "gpt-6-astra")
     XCTAssertEqual(defaults.string(forKey: "claudeModel"), "claude-opus-5-5")
     XCTAssertNotEqual(defaults.string(forKey: "solverMode"), "both")
     defaults.set(0, forKey: "settingsVersion"); defaults.set("my-custom-model", forKey: "solverModel")

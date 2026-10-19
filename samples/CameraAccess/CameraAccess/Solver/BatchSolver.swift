@@ -17,14 +17,58 @@ struct AICredential: Sendable {
   let key: String
   let model: String
 }
+
+/// Paid speed lanes: Claude fast mode (Opus 5.5, up to 2.5x output speed) and OpenAI Fast/Ultrafast (GPT-6 Astra and
+/// 6.1 Sol, Ultrafast about 4-6x). Accuracy is the same; only speed and price change.
+enum SpeedTier: Int, Sendable, Comparable {
+  case standard, fast, ultrafast
+  static func < (a: SpeedTier, b: SpeedTier) -> Bool { a.rawValue < b.rawValue }
+  /// The fastest tier the model offers.
+  static func best(_ provider: AIProvider, model: String) -> SpeedTier {
+    switch provider {
+    case .claude: return model.hasPrefix("claude-opus-5-5") ? .fast : .standard
+    case .openAI:
+      if ["gpt-6-astra", "gpt-6.1-sol"].contains(where: model.hasPrefix) { return .ultrafast }
+      return ["gpt-6", "gpt-5"].contains(where: model.hasPrefix) ? .fast : .standard
+    }
+  }
+  var lower: SpeedTier? { SpeedTier(rawValue: rawValue - 1) }
+}
+
+/// The speed tier each provider and model accepted this session. A refused tier steps down at once instead of
+/// waiting: not allowed (400/403) is remembered; busy (429/503/529) is remembered after it happens twice.
+struct TierMemory: Sendable {
+  private var chosen: [String: SpeedTier] = [:]
+  private var busy: [String: Int] = [:]
+  private func key(_ credential: AICredential) -> String { "\(credential.provider.rawValue)|\(credential.model)" }
+  func tier(for credential: AICredential, fast: Bool) -> SpeedTier {
+    guard fast else { return .standard }
+    let best = SpeedTier.best(credential.provider, model: credential.model)
+    return min(best, chosen[key(credential)] ?? best)
+  }
+  /// The tier to resend the same request at, or nil when `error` is not a refusal of `tier`.
+  mutating func stepDown(after error: any Error, from tier: SpeedTier, credential: AICredential) -> SpeedTier? {
+    guard let lower = tier.lower, let service = error as? AIServiceError, case .http(_, let status, _, _) = service else { return nil }
+    let key = key(credential)
+    if [400, 403].contains(status) { chosen[key] = lower; return lower }
+    // A spend cap or exhausted credit is not about speed: it fails the same way on every lane.
+    guard [429, 503, 529].contains(status), service.isRetryable else { return nil }
+    busy[key, default: 0] += 1
+    if busy[key, default: 0] >= 2 { chosen[key] = lower }
+    return lower
+  }
+}
 struct SolverConfiguration: Sendable {
-  static let openAIDefault = "gpt-6.1-sol"
+  /// The most accurate readers of each provider (Roboflow OCR, 2026-10): Claude Opus 5.5, then GPT-6 Astra.
+  static let openAIDefault = "gpt-6-astra"
   static let claudeDefault = "claude-opus-5-5"
   var mode: SolverMode = .openAI
   var openAIKey = ""
   var claudeKey = ""
   var openAIModel = SolverConfiguration.openAIDefault
   var claudeModel = SolverConfiguration.claudeDefault
+  /// Use the providers' paid speed lanes (Claude fast mode, OpenAI Ultrafast/Fast); they fall back by themselves.
+  var fastTiers = true
   var lead: AICredential { credential(mode == .claude ? .claude : .openAI) }
   var peer: AICredential? { mode == .both ? credential(.claude) : nil }
   /// Results are cached per setup: changing provider or model re-solves pages instead of mixing answers.
@@ -33,16 +77,14 @@ struct SolverConfiguration: Sendable {
     peer.map { "\(lead.provider.name) \(lead.model) + \($0.provider.name) \($0.model): independent solutions per page, reconciled against the photos" }
       ?? "\(lead.provider.name) \(lead.model): solved page by page with a built-in check"
   }
-  /// The page check uses the lead provider's fast model: it must answer while the wearer still looks at the sheet.
+  /// The page check uses the best reader whose key is saved, whichever provider solves: Claude Opus 5.5 in fast mode
+  /// reads single printed values best and answers fastest (Roboflow OCR 2026-10: 67.8% single values vs 60.9% for
+  /// GPT-6 Astra; 5.9 s per image at standard speed vs 12.1 s); without a Claude key, GPT-6 Astra on Ultrafast.
   var checkCredential: AICredential {
-    let lead = self.lead
-    return AICredential(provider: lead.provider, key: lead.key, model: Self.checkModel(lead.provider, solving: lead.model))
+    let provider: AIProvider = claudeKey.trimmed.isEmpty ? .openAI : .claude
+    return AICredential(provider: provider, key: credential(provider).key, model: Self.checkModel(provider))
   }
-  /// The providers' fastest vision models (Claude Haiku 5.5: "fastest"; GPT-6 Luna: about 2-3 s to the first token),
-  /// at low effort. If the account cannot use one, the check falls back to the solve model (see `PageChecker`).
-  static func checkModel(_ provider: AIProvider, solving model: String) -> String {
-    provider == .claude ? "claude-haiku-5-5" : "gpt-6-luna"
-  }
+  static func checkModel(_ provider: AIProvider) -> String { provider == .claude ? "claude-opus-5-5" : "gpt-6-astra" }
   func credential(_ provider: AIProvider) -> AICredential {
     AICredential(provider: provider, key: (provider == .openAI ? openAIKey : claudeKey).trimmed,
       model: (provider == .openAI ? openAIModel : claudeModel).trimmed)
@@ -107,6 +149,7 @@ struct AIRequest: Sendable {
   let prompt: String
   let tokenLimit: Int
   var kind: Kind = .solve
+  var tier: SpeedTier = .standard
 }
 protocol AITransport: Sendable { func send(_ input: AIRequest) async throws -> Data }
 
@@ -141,7 +184,8 @@ struct SolverClient: AITransport {
     try Task.checkCancellation()
     return try parser.finish()
   }
-  static let effort = "medium"
+  /// Solves think harder (the user asked for the best answers); paid speed lanes keep them quick.
+  static let effort = "high"
   /// Repairs may use more output only on models that accept it; older IDs (e.g. gpt-4.1) cap near 32k.
   static func outputLimit(_ requested: Int, model: String) -> Int {
     let large = ["gpt-5", "gpt-6", "o3", "o4", "claude-opus-5", "claude-sonnet-5", "claude-haiku-5"].contains(where: model.hasPrefix)
@@ -178,6 +222,7 @@ struct SolverClient: AITransport {
       // Claude 5 models think adaptively; effort trades depth for speed. Older IDs keep their defaults.
       if ["claude-opus-5", "claude-sonnet-5", "claude-haiku-5"].contains(where: model.hasPrefix) { output["effort"] = depth }
       body["output_config"] = output
+      if input.tier > .standard && model.hasPrefix("claude-opus-5-5") { body["speed"] = "fast" }
     } else {
       request.setValue("Bearer \(input.credential.key)", forHTTPHeaderField: "Authorization")
       body["store"] = false; body["max_output_tokens"] = input.tokenLimit
@@ -185,6 +230,11 @@ struct SolverClient: AITransport {
       body["instructions"] = system; body["input"] = [["role": "user", "content": content]]
       body["text"] = ["format": ["type": "json_schema", "name": checking ? "page_check" : "page_solution", "strict": true, "schema": format]]
       if ["gpt-5", "gpt-6", "o3", "o4"].contains(where: model.hasPrefix) { body["reasoning"] = ["effort": depth] }
+      switch input.tier {
+      case .ultrafast: body["service_tier"] = "ultrafast"
+      case .fast: body["service_tier"] = "fast"
+      case .standard: break
+      }
     }
     // Sorted keys keep the schema/prefix byte-identical between requests (provider caches).
     request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -217,6 +267,9 @@ struct SolverClient: AITransport {
         if root["status"] as? String == "failed" {
           let error = root["error"] as? [String: Any]
           let code = error?["code"] as? String ?? ""
+          if (error?["param"] as? String) == "service_tier" || (error?["message"] as? String ?? "").contains("service_tier") {
+            throw AIServiceError.http(provider: .openAI, status: 400, retryAfter: nil, detail: "service_tier: \(error?["message"] as? String ?? code)")
+          }
           // Server-side failures are transient; anything else (e.g. invalid image) is not.
           if ["server_error", "rate_limit_exceeded", "overloaded"].contains(code) {
             throw AIServiceError.interrupted(provider: .openAI, detail: code)
@@ -357,6 +410,10 @@ struct StreamParser {
       let error = event["error"] as? [String: Any]
       let kind = (error?["type"] as? String) ?? (event["code"] as? String)
       let message = (error?["message"] as? String) ?? (event["message"] as? String) ?? "Request failed."
+      if (event["param"] as? String) == "service_tier" || message.contains("service_tier") {
+        // A speed tier the project or model can't use: the request is resent at a lower tier.
+        throw AIServiceError.http(provider: provider, status: 400, retryAfter: nil, detail: "service_tier: " + message)
+      }
       let transient: Set<String> = ["overloaded_error", "api_error", "timeout_error", "rate_limit_error", "server_error",
         "rate_limit_exceeded", "overloaded"]
       guard let kind, !transient.contains(kind) else {
