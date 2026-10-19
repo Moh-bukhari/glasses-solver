@@ -74,7 +74,7 @@ Evidence:
 - **Mock probe.** The Meta mock reports "Critical error, the stream should end" when the stream restarts after a full photo, so the app falls back to a full reconnect; see priority 5.
 - **Later runs.** Check later runs on this branch before installing a newer commit. A run counts only when both jobs passed and its head SHA matches the commit.
 - **Linux.** The logic-only suites (24 gesture, 20 page-solving) and 40 image-free coordinator tests also pass on Linux under Swift 6.3. That is supporting evidence, not a replacement for CI.
-- **Review.** 2.0: an adversarial multi-lens review (compile, coordinator, SDK, pipeline, tests, requirements) was run, and every confirmed finding was fixed. 2.1: a review (compile, coordinator, hands-free walkthrough, gestures, tests) is in progress at this snapshot.
+- **Review.** 2.0: an adversarial multi-lens review (compile, coordinator, SDK, pipeline, tests, requirements) was run, and every confirmed finding was fixed. 2.1: a review (compile, coordinator, hands-free walkthrough, gestures, tests) was started but stopped at the user's request before its findings were verified, so none were acted on. Re-run it if more assurance is needed before a device test.
 
 History: the user confirmed that 1.x glasses capture and PDF generation worked. They then reported that **"solving" never produced a PDF**. The cause was the latency of a sequential, non-streaming multi-stage pipeline (§6), not a deadlock.
 
