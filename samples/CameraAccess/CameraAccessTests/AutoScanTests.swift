@@ -667,6 +667,90 @@ final class AutoScanTests: XCTestCase {
     XCTAssertEqual(camera.starts, 1, "A second shortcut press while scanning does not restart the camera.")
     XCTAssertEqual(model.phase, .seeking); model.stop()
   }
+  /// Sends preview frames for about `seconds` while seeking, one every 350 ms.
+  private func sendFrames(_ camera: FakeScanCamera, model: AutoScanModel, seconds: Double) async throws {
+    let image = paperImage().cgImage!
+    for _ in 0..<Int(seconds / 0.35) {
+      guard model.phase == .seeking else { break }
+      camera.onFrame?(image); try await Task.sleep(for: .milliseconds(350))
+    }
+  }
+  func testLiveFramesKeepEachViewOfAPageWithoutStoppingTheCamera() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: frameSample()), solver = FakePageSolver(), saver = FakeSolutionSaver()
+    let model = makeModel(camera, analyzer, solver, saver, capture: .frames)
+    await analyzer.setText(text(viewA))
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await sendFrames(camera, model: model, seconds: 1.5)
+    XCTAssertEqual(model.phase, .seeking, "One view does not end the page while new views may follow.")
+    XCTAssertTrue(model.guide.contains("1 photo, questions 1 and 2"), model.guide)
+    await analyzer.setContent(0.3); await analyzer.setText(text(viewB)) // the wearer looks lower on the page
+    try await sendFrames(camera, model: model, seconds: 6)
+    await waitUntil { model.phase == .awaitingNext }
+    XCTAssertEqual(model.phase, .awaitingNext, model.guide)
+    XCTAssertEqual(model.pages.count, 1); XCTAssertEqual(model.pages[0].frames.count, 2, "Both views are photos of page 1.")
+    XCTAssertTrue(model.guide.contains("Page 1 saved: 2 photos, questions 1 to 4"), model.guide)
+    XCTAssertEqual(camera.captures, 0, "No full-resolution still, so the preview never pauses.")
+    XCTAssertEqual(camera.stops, 1, "Only the start-of-scan reset stops the camera.")
+    let reads = await analyzer.reads
+    XCTAssertLessThan(reads, 25, "Text is read a few times a second at most, only on steady frames.")
+    model.handle(.finish); await waitUntil { model.phase == .finished }
+    XCTAssertEqual(saver.frameCounts, [2]); model.stop()
+  }
+  func testQuestionNumbersAreSpokenAndASkippedOneIsAskedFor() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: frameSample()), voice = FakeScanVoice()
+    let model = makeModel(camera, analyzer, FakePageSolver(), FakeSolutionSaver(), capture: .frames, voice: voice)
+    await analyzer.setText(text(viewA))
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await sendFrames(camera, model: model, seconds: 1.5)
+    XCTAssertTrue(voice.messages.contains("Questions 1 and 2."), "\(voice.messages)")
+    await analyzer.setContent(0.3)
+    await analyzer.setText(text(["4. Graph y equals two x plus one", "5. Find the area of the circle", "Use the grid provided below"]))
+    try await sendFrames(camera, model: model, seconds: 4)
+    XCTAssertTrue(voice.messages.contains("Questions 4 and 5."), "\(voice.messages)")
+    XCTAssertTrue(voice.messages.contains("Question 3 isn't captured yet. Look at it again."), "\(voice.messages)")
+    XCTAssertEqual(model.phase, .seeking, "A missing question keeps the page open longer instead of saving it at once.")
+    await analyzer.setContent(0.6); await analyzer.setText(text(viewB)) // the wearer looks back at question 3
+    try await sendFrames(camera, model: model, seconds: 1.5)
+    XCTAssertTrue(voice.messages.contains("Question 3."), "\(voice.messages)")
+    XCTAssertEqual(voice.messages.filter { $0.contains("isn't captured") }.count, 1, "Each gap is mentioned once.")
+    model.stop()
+  }
+  func testThumbsRightSavesTheFramesNowAndThumbsUpSavesThenSolves() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: frameSample()), solver = FakePageSolver(), saver = FakeSolutionSaver()
+    let model = makeModel(camera, analyzer, solver, saver, capture: .frames)
+    await analyzer.setText(text(viewA))
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await sendFrames(camera, model: model, seconds: 1.5)
+    model.handle(.next) // 👉 page done
+    await waitUntil { model.phase == .awaitingNext && model.pages.count == 1 }
+    XCTAssertEqual(model.pages.first?.frames.count, 1)
+    model.handle(.next) // 👉 at the next page
+    XCTAssertEqual(model.phase, .seeking)
+    await analyzer.setContent(0.3); await analyzer.setText(text(viewB))
+    try await sendFrames(camera, model: model, seconds: 1.5)
+    model.handle(.finish) // 👍 with page 2 still open: it is saved first, then everything is solved
+    await waitUntil { model.phase == .finished }
+    XCTAssertEqual(model.phase, .finished, model.guide)
+    XCTAssertEqual(saver.frameCounts, [1, 1]); XCTAssertEqual(camera.captures, 0)
+    let calls = await solver.calls; XCTAssertEqual(calls, 2)
+    model.stop()
+  }
+  func testThumbsUpBeforeAnyFrameIsKeptDoesNotFinish() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    var far = frameSample(); far.linePixels = 12 // readable outline but too small for the AI
+    let analyzer = FakePageAnalyzer(sample: far), voice = FakeScanVoice()
+    let model = makeModel(camera, analyzer, FakePageSolver(), FakeSolutionSaver(), capture: .frames, voice: voice)
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await sendFrames(camera, model: model, seconds: 2)
+    XCTAssertTrue(voice.messages.contains(ScanCue.closer.message), "Small text asks the wearer to move closer. \(voice.messages)")
+    let reads = await analyzer.reads; XCTAssertEqual(reads, 0, "Too-small text is never read or kept.")
+    model.handle(.finish)
+    XCTAssertEqual(model.phase, .seeking); XCTAssertTrue(model.pages.isEmpty)
+    model.stop()
+  }
   func testFixingOnePageAfterThePDFResolvesOnlyItsNeighborhood() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
     let solver = FakePageSolver(), saver = FakeSolutionSaver()
@@ -812,6 +896,24 @@ final class AutoScanTests: XCTestCase {
     XCTAssertFalse(FileManager.default.fileExists(atPath: oldSecond.path))
     XCTAssertEqual(try Data(contentsOf: restored[1].url), bytes)
   }
+  func testDraftKeepsEveryPhotoOfAPageAndReplacesThemTogether() throws {
+    let store = temporaryDraft()
+    defer { try? store.clear() }
+    let parts = (1...3).map { Data(repeating: UInt8($0), count: 32) }
+    var pages = try store.add(Data(repeating: 9, count: 32), to: [], replacing: nil) // a single still, as 2.0 saved it
+    pages = try store.add(frames: parts, to: pages, replacing: nil)
+    var restored = store.load()
+    XCTAssertEqual(restored.map(\.frames.count), [1, 3])
+    XCTAssertEqual(try restored[1].frames.map { try Data(contentsOf: $0) }, parts, "Photos keep their capture order.")
+    XCTAssertEqual(restored[1].url, restored[1].frames[0])
+    let oldFrames = pages[1].frames
+    pages = try store.add(frames: [parts[0]], to: pages, replacing: 1)
+    restored = store.load()
+    XCTAssertEqual(restored.map(\.frames.count), [1, 1])
+    XCTAssertTrue(oldFrames.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) }, "A retake removes every old photo.")
+    pages = try store.remove(at: 0, from: pages)
+    XCTAssertEqual(store.load().map(\.id), pages.map(\.id))
+  }
   func testCombinedPDFIncludesCoverageAllPartsAndAllSourcePhotos() throws {
     var page = solvedPage(); page.coverage = "2 pages. All 2 subparts included."
     page = SolvedPage(readable: true, retakeReason: "", title: "Combined packet", problems: [
@@ -832,12 +934,25 @@ final class AutoScanTests: XCTestCase {
   private func temporaryDraft() -> ScanDraftStore {
     ScanDraftStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent("draft-\(UUID())"))
   }
-  private func makeModel(_ camera: FakeScanCamera, _ analyzer: FakePageAnalyzer, _ solver: FakePageSolver, _ saver: FakeSolutionSaver) -> AutoScanModel {
+  /// Still-photo capture unless `capture` says otherwise; most flows predate live frames and still apply to stills.
+  private func makeModel(_ camera: FakeScanCamera, _ analyzer: FakePageAnalyzer, _ solver: FakePageSolver, _ saver: FakeSolutionSaver,
+                         capture: AutoScanModel.CaptureMode = .photos, voice: FakeScanVoice? = nil) -> AutoScanModel {
     let model = AutoScanModel(camera: camera, analyzer: analyzer, solver: solver, saver: saver,
-      draft: temporaryDraft(), voice: FakeScanVoice(),
+      draft: temporaryDraft(), voice: voice ?? FakeScanVoice(),
       configurationProvider: { SolverConfiguration(openAIKey: "test-key-never-sent", openAIModel: "gpt-4.1") })
-    model.voiceGuidance = false; return model
+    model.voiceGuidance = voice != nil; model.captureMode = capture; return model
   }
+  /// A steady, close-up preview frame: text 30 px tall in a 1280-px frame.
+  private func frameSample() -> PageSample {
+    var sample = goodSample(); sample.linePixels = 30; sample.frameHeight = 1280; return sample
+  }
+  private func text(_ lines: [String]) -> FrameText {
+    FrameText(lines: lines.enumerated().map { index, line in
+      ReadLine(text: line, confidence: 1, box: CGRect(x: 0.1, y: 0.8 - Double(index) * 0.1, width: 0.8, height: 0.05))
+    })
+  }
+  private let viewA = ["1. Solve for x in 2x + 3 = 11", "2. Find the slope of the line", "Show all of your work clearly"]
+  private let viewB = ["3. Factor x squared minus nine", "4. Graph y equals two x plus one", "Use the grid provided below"]
   private func sendStableFrames(_ camera: FakeScanCamera, model: AutoScanModel, count: Int = 8) async throws {
     let image = paperImage().cgImage!
     for _ in 0..<count {
@@ -911,6 +1026,10 @@ private final class FakeScanCamera: ScanCamera {
 private actor FakePageAnalyzer: PageAnalyzing {
   var sample: PageSample
   var rejectFirstStill: Bool
+  var text = FrameText()
+  private(set) var reads = 0
+  func setText(_ value: FrameText) { text = value }
+  func readText(_ image: CGImage) async throws -> FrameText { reads += 1; return text }
   init(sample: PageSample, rejectFirstStill: Bool = false) { self.sample = sample; self.rejectFirstStill = rejectFirstStill }
   func setGesture(_ gesture: HandGesture?) { sample.gesture = gesture }
   func rejectNextStill() { rejectFirstStill = true }
@@ -972,8 +1091,9 @@ private final class FakeSolutionSaver: SolutionSaving {
   var saves = 0
   var sourceCount = 0
   var lastPage: SolvedPage?
-  func save(page: SolvedPage, sources: [URL]) async throws -> SavedSolution {
-    saves += 1; sourceCount = sources.count; lastPage = page
+  var frameCounts: [Int] = []
+  func save(page: SolvedPage, sources: [[URL]]) async throws -> SavedSolution {
+    saves += 1; sourceCount = sources.count; frameCounts = sources.map(\.count); lastPage = page
     return SavedSolution(id: UUID(), title: page.title, date: Date(), pdf: URL(fileURLWithPath: "/tmp/test.pdf"), source: URL(fileURLWithPath: "/tmp/test.jpg"))
   }
 }

@@ -44,6 +44,8 @@ struct PageSample: Sendable {
   var linePixels: Double = 0
   /// A deliberate command hand (fist with the thumb up, down, right or left) in this preview frame. Stills are never classified.
   var gesture: HandGesture? = nil
+  /// Height in pixels that `linePixels` refers to (the analyzed frame, or the full still); 0 when unknown.
+  var frameHeight: Int = 0
   var acceptable: Bool { issue == nil && !fingerprint.isEmpty }
   var corners: [PagePoint] {
     guard let b = contentBounds else { return [] }
@@ -171,6 +173,8 @@ struct StabilityGate: Sendable {
 protocol PageAnalyzing: Sendable {
   func analyze(_ image: CGImage, still: Bool) async throws -> PageSample
   func prepare(_ data: Data) async throws -> PreparedPhoto
+  /// Reads the text lines of a steady preview frame on the phone, for question numbers and telling views apart.
+  func readText(_ image: CGImage) async throws -> FrameText
 }
 
 struct PreparedPhoto: @unchecked Sendable {
@@ -229,7 +233,7 @@ actor PageAnalyzer: PageAnalyzing {
       closeEnough: !(lineHeight > 0 && lineHeight * height < 10)
         && !(bounds.map { $0.width < 0.18 && $0.height < 0.14 } ?? false),
       cue: ContentFraming.cue(bounds: bounds, lineHeight: lineHeight, imageHeight: Int(height)),
-      linePixels: lineHeight * height, gesture: gesture)
+      linePixels: lineHeight * height, gesture: gesture, frameHeight: Int(height))
     // Only obvious darkness, missing detail, or heavy blur can veto a capture. Geometry cannot.
     if metrics.mean < 0.07 {
       sample.cue = .moreLight; sample.issue = sample.cue.message
@@ -241,6 +245,23 @@ actor PageAnalyzer: PageAnalyzing {
     // No minimum paper size, perspective limit, border requirement, or 800-pixel cutoff.
     // The full still, not the preview, is what the AI assesses for complete readable problems.
     return sample
+  }
+
+  /// Accurate line recognition (about 120-250 ms for a 720x1280 frame on recent iPhones), run only on steady frames a
+  /// few times a second. Language correction is off: it doubles the time and would "fix" labels such as "3." or "Q4".
+  /// The default minimum text height (1/32 of the frame) would drop ordinary worksheet text, so 10 px is set instead.
+  func readText(_ image: CGImage) throws -> FrameText {
+    let request = VNRecognizeTextRequest()
+    request.revision = VNRecognizeTextRequestRevision3
+    request.recognitionLevel = .accurate
+    request.usesLanguageCorrection = false
+    request.minimumTextHeight = Float(10.0 / Double(max(image.height, 1)))
+    try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
+    let lines = (request.results ?? []).compactMap { observation -> ReadLine? in
+      guard let best = observation.topCandidates(1).first else { return nil }
+      return ReadLine(text: best.string, confidence: Double(best.confidence), box: observation.boundingBox)
+    }
+    return FrameText(lines: lines)
   }
 
   func prepare(_ data: Data) throws -> PreparedPhoto {
@@ -329,26 +350,31 @@ actor PageAnalyzer: PageAnalyzing {
 
 /// A saved sheet stays latched until the writing changes; head movement alone should not rearm it.
 /// Similar-looking pages can always be explicitly armed with the spoken "next page" command.
+/// A page saved as several close-up frames is a set of views: the page has turned only when the writing in view
+/// differs from every one of them.
 struct PageTurnGate {
-  private var saved: PageSample?
+  private var saved: [PageSample] = []
   private var savedAt = 0.0
   private var changedFrames = 0
   private var changedSince = 0.0
-  mutating func saved(_ sample: PageSample, at time: Double) { saved = sample; savedAt = time; changedFrames = 0 }
+  mutating func saved(_ sample: PageSample, at time: Double) { saved([sample], at: time) }
+  mutating func saved(_ samples: [PageSample], at time: Double) { saved = samples; savedAt = time; changedFrames = 0 }
   mutating func reset() { self = Self() }
-  var hasReference: Bool { saved != nil }
+  var hasReference: Bool { !saved.isEmpty }
   /// Requires three consecutive changed views spanning at least 0.4 s, so per-frame analysis cannot rush it.
   mutating func observe(_ sample: PageSample, at time: Double) -> Bool {
-    guard let saved, time - savedAt >= 2, sample.acceptable, sample.closeEnough, sample.gesture == nil else {
+    guard !saved.isEmpty, time - savedAt >= 2, sample.acceptable, sample.closeEnough, sample.gesture == nil else {
       changedFrames = 0; return false
     }
-    let a = saved.contentFingerprint, b = sample.contentFingerprint
-    let changed: Bool
-    if !a.isEmpty, a.count == b.count {
-      let difference = zip(a, b).reduce(0.0) { $0 + abs($1.0 - $1.1) } / Double(a.count)
-      changed = difference > 0.065
-    } else { changed = StabilityGate.imageDifference(saved, sample) > 0.20 }
+    let changed = saved.allSatisfy { Self.differs($0, sample) }
     if changed { if changedFrames == 0 { changedSince = time }; changedFrames += 1 } else { changedFrames = 0 }
     return changedFrames >= 3 && time - changedSince >= 0.4
+  }
+  private static func differs(_ saved: PageSample, _ sample: PageSample) -> Bool {
+    let a = saved.contentFingerprint, b = sample.contentFingerprint
+    if !a.isEmpty, a.count == b.count {
+      return zip(a, b).reduce(0.0) { $0 + abs($1.0 - $1.1) } / Double(a.count) > 0.065
+    }
+    return StabilityGate.imageDifference(saved, sample) > 0.20
   }
 }

@@ -2,7 +2,7 @@
 
 Start here when continuing this project. This file records the product intent, current implementation, operating instructions, decisions, and unfinished work; no earlier chat is required.
 
-**Snapshot updated:** 2026-10-19 UTC. **App:** 2.1, build 7, on branch `claude/pensive-allen-ggkllj`, which is based on `solver-app`. **Verified app commit:** `3129449` (CI run 39203283744, build and verify green, 100 tests, 0 failures). 2.0 was verified at `f963ee9` (run 39197936367, 89 tests). Later documentation commits do not imply a new app build. Recheck the branch and CI before relying on this snapshot.
+**Snapshot updated:** 2026-10-19 UTC. **App:** 2.2, build 8 (live multi-frame capture; CI pending at this line's update; 2.1 below is the last verified build), on branch `claude/pensive-allen-ggkllj`, which is based on `solver-app`. **Verified app commit:** `3129449` (CI run 39203283744, build and verify green, 100 tests, 0 failures). 2.0 was verified at `f963ee9` (run 39197936367, 89 tests). Later documentation commits do not imply a new app build. Recheck the branch and CI before relying on this snapshot.
 
 ## 1. Find the right branch and read these files
 
@@ -86,6 +86,19 @@ History: the user confirmed that 1.x glasses capture and PDF generation worked. 
 2. Install `GlassesSolver-unsigned.ipa` over the existing app with the user's working **iloader**, using the same Apple identity so data and Keychain are kept. Don't prescribe other sideloading tools.
 3. Glasses: paired in Meta AI, developer mode on, and camera permission granted when asked. Inputs needs Meta AI V290+ and glasses firmware V128+. It may also be gated per app or user; the app reports this and falls back to gestures.
 4. **Auto Scan → Settings**: choose a provider, enter keys, and save. Default models are `gpt-6.1-sol` and `claude-opus-5-5`.
+
+### Live multi-frame capture (2.2, default)
+
+The user reported that each page took "a lot, a lot of time" and missed about half the time. The per-page full photo was the likely cause: stream stop, Photo start (Meta: "not yet as reliable as the video stream"), a 3–6 MB transfer, then a stream restart or full reconnect, with the still taken a moment after the preview was judged steady. 2.2 keeps preview frames instead ([FrameCapture.swift](samples/CameraAccess/CameraAccess/Solver/FrameCapture.swift), `AutoScanModel.collect/keep/commitPage`):
+
+- **Gate (every frame).** The frame must be acceptable, show no command hand, have text at least 20 px tall in the 1280-px frame (Tesseract: accuracy collapses below a 10 px x-height), and be steady for 3 analyzed frames. A view with no text found needs 6. Too-small text gets "move closer".
+- **Read (at most every 0.33 s, steady frames only).** `VNRecognizeTextRequest`: revision 3, `.accurate`, language correction off, minimum text height 10 px. Question numbers come from line starts (`QuestionLabels`: "3." "3)" "(3)" "Q3" "Problem 3"…, not "2.5", "3x", dates or times).
+- **Keep (`PageFrames`).** One frame per distinct view. Two frames are the same view when they share at least 60% of their readable lines; with fewer than 3 lines, image fingerprints decide. A same-view frame replaces a kept one only if its quality is at least 0.10 better (contrast-normalized sharpness, text size, read confidence) and it loses no question number. At most 6 views per page.
+- **Speak.** New question numbers ("Questions 1 and 2."). A short skip (at most 3) across the packet or page gets "Question 3 isn't captured yet. Look at it again.", once each.
+- **Save.** When nothing new has appeared for 2.5 s (+5 s if a number is missing on the page), on 👉, on 👍 (save, then finish), or when the page holds 6 views. Frames are stored as `<id>.jpg`, `<id>-2.jpg`, …; the next page arms when the view differs from every kept view.
+- **Solve.** A page's frames go to the AI as "PRIMARY page …, photo k of n" with a note that they overlap; neighbors send their nearest 2 frames. The PDF titles each source photo "page N, part k of n".
+- **Settings → Capture → Full-resolution photo** restores the 2.1 still path (still used by the older coordinator tests).
+- **Not yet measured on the device:** OCR latency, the 20 px gate and 2.5 s quiet time on real worksheets, and whether the stream ladder drops to 504×896. A middle option, `stream.capturePhoto(format: .jpeg)` (an in-stream still, about 1080×1440 per a Meta forum report), is untried.
 
 ### Scan and solve
 

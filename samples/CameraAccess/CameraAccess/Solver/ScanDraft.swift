@@ -4,7 +4,12 @@ import ImageIO
 
 struct CapturedPage: Identifiable {
   let id: UUID
-  let url: URL
+  /// Every photo of the page in capture order: one still, or several close-up frames of its parts.
+  let frames: [URL]
+  /// The first photo: the page's thumbnail.
+  var url: URL { frames[0] }
+  init(id: UUID, frames: [URL]) { self.id = id; self.frames = frames }
+  init(id: UUID, url: URL) { self.init(id: id, frames: [url]) }
   /// Decodes from disk; cache the result rather than calling this from a view body.
   func loadThumbnail() -> UIImage? {
     guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
@@ -29,34 +34,51 @@ struct ScanDraftStore {
   /// The draft is the source of a finished PDF until the next packet starts or a page is edited.
   var isSolved: Bool { FileManager.default.fileExists(atPath: solvedMarker.path) }
   func markSolved() throws { try Data().write(to: solvedMarker, options: [.atomic, Self.protection]) }
+  /// Frame 1 is `<id>.jpg` (the only file of a single-photo page, as in 1.x/2.0 drafts); later frames are `<id>-2.jpg`, `<id>-3.jpg`, …
+  private func frameURL(_ id: UUID, _ index: Int) -> URL {
+    directory.appendingPathComponent(index == 0 ? "\(id).jpg" : "\(id)-\(index + 1).jpg")
+  }
   func load() -> [CapturedPage] {
     guard let data = try? Data(contentsOf: manifest), let ids = try? JSONDecoder().decode([UUID].self, from: data) else { return [] }
-    let pages = ids.map { CapturedPage(id: $0, url: directory.appendingPathComponent("\($0).jpg")) }
-      .filter { FileManager.default.fileExists(atPath: $0.url.path) }
+    let pages: [CapturedPage] = ids.compactMap { id in
+      var frames: [URL] = []
+      while true {
+        let url = frameURL(id, frames.count)
+        guard FileManager.default.fileExists(atPath: url.path) else { break }
+        frames.append(url)
+      }
+      return frames.isEmpty ? nil : CapturedPage(id: id, frames: frames)
+    }
     // Drafts saved by 1.x used complete protection, which is unreadable while the phone is locked.
-    for url in pages.map(\.url) + [manifest] {
+    for url in pages.flatMap(\.frames) + [manifest] {
       try? FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: url.path)
     }
     return pages
   }
   func add(_ jpeg: Data, to pages: [CapturedPage], replacing index: Int?) throws -> [CapturedPage] {
+    try add(frames: [jpeg], to: pages, replacing: index)
+  }
+  /// Saves one page made of one or more photos. A replacement is written before the old photos are deleted.
+  func add(frames jpegs: [Data], to pages: [CapturedPage], replacing index: Int?) throws -> [CapturedPage] {
+    guard !jpegs.isEmpty else { throw SolverError.message("No photo to save for this page.") }
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let id = UUID(), url = directory.appendingPathComponent("\(id).jpg")
-    try jpeg.write(to: url, options: [.atomic, Self.protection])
+    let id = UUID(), urls = jpegs.indices.map { frameURL(id, $0) }
+    do { for (jpeg, url) in zip(jpegs, urls) { try jpeg.write(to: url, options: [.atomic, Self.protection]) } }
+    catch { urls.forEach { try? FileManager.default.removeItem(at: $0) }; throw error }
     try? FileManager.default.removeItem(at: solvedMarker)
     var updated = pages
-    if let index, updated.indices.contains(index) { updated[index] = CapturedPage(id: id, url: url) }
-    else { updated.append(CapturedPage(id: id, url: url)) }
+    let page = CapturedPage(id: id, frames: urls)
+    if let index, updated.indices.contains(index) { updated[index] = page } else { updated.append(page) }
     do { try save(updated) }
-    catch { try? FileManager.default.removeItem(at: url); throw error }
-    if let index, pages.indices.contains(index) { try? FileManager.default.removeItem(at: pages[index].url) }
+    catch { urls.forEach { try? FileManager.default.removeItem(at: $0) }; throw error }
+    if let index, pages.indices.contains(index) { pages[index].frames.forEach { try? FileManager.default.removeItem(at: $0) } }
     return updated
   }
   func remove(at index: Int, from pages: [CapturedPage]) throws -> [CapturedPage] {
     guard pages.indices.contains(index) else { return pages }
     var updated = pages; let old = updated.remove(at: index)
     try? FileManager.default.removeItem(at: solvedMarker)
-    try save(updated); try? FileManager.default.removeItem(at: old.url); return updated
+    try save(updated); old.frames.forEach { try? FileManager.default.removeItem(at: $0) }; return updated
   }
   func clear() throws {
     if FileManager.default.fileExists(atPath: directory.path) { try FileManager.default.removeItem(at: directory) }

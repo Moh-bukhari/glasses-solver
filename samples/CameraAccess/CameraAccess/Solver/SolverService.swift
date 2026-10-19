@@ -32,7 +32,8 @@ struct SavedSolution: Identifiable {
 
 @MainActor
 protocol SolutionSaving {
-  func save(page: SolvedPage, sources: [URL]) async throws -> SavedSolution
+  /// `sources` holds each packet page's photos in order; a page may have several close-up photos.
+  func save(page: SolvedPage, sources: [[URL]]) async throws -> SavedSolution
 }
 
 @MainActor
@@ -40,11 +41,21 @@ struct SolutionStore: SolutionSaving {
   static var directory: URL {
     FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Solutions", isDirectory: true)
   }
-  func save(page: SolvedPage, sources: [URL]) async throws -> SavedSolution {
+  func save(page: SolvedPage, sources pages: [[URL]]) async throws -> SavedSolution {
     let id = UUID(), date = Date()
     let folder = Self.directory.appendingPathComponent(id.uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     let pdf = folder.appendingPathComponent("Solution.pdf"), source = folder.appendingPathComponent("Paper.jpg")
+    // Flattened in page order; each photo is titled with its packet page so "source page N" can be found in the PDF.
+    let sources = pages.flatMap { $0 }
+    let titles = pages.enumerated().flatMap { page, frames in
+      frames.indices.map { frames.count == 1 ? "page \(page + 1)" : "page \(page + 1), part \($0 + 1) of \(frames.count)" }
+    }
+    let names = pages.enumerated().flatMap { page, frames in
+      frames.indices.map { frame in
+        page == 0 && frame == 0 ? "Paper.jpg" : (frame == 0 ? "Paper-\(page + 1).jpg" : "Paper-\(page + 1)-\(frame + 1).jpg")
+      }
+    }
     do {
       guard !sources.isEmpty else { throw SolverError.message("No source photos were saved.") }
       // Decoding full-size photos is the slow part: do it off the main actor, all pages concurrently.
@@ -60,11 +71,12 @@ struct SolutionStore: SolutionSaving {
         guard let image = UIImage(data: data) else { throw SolverError.message("A source photo is unreadable.") }
         return image
       }
-      let data = try await Task.detached(priority: .userInitiated) { try SolutionPDF.render(page: page, sources: images) }.value
+      let data = try await Task.detached(priority: .userInitiated) {
+        try SolutionPDF.render(page: page, sources: images, titles: titles)
+      }.value
       try data.write(to: pdf, options: .atomic)
-      for (index, original) in sources.enumerated() {
-        let path = index == 0 ? source : folder.appendingPathComponent("Paper-\(index + 1).jpg")
-        try FileManager.default.copyItem(at: original, to: path)
+      for (original, name) in zip(sources, names) {
+        try FileManager.default.copyItem(at: original, to: folder.appendingPathComponent(name))
       }
       try JSONEncoder().encode(page).write(to: folder.appendingPathComponent("Solution.json"), options: .atomic)
       return SavedSolution(id: id, title: page.title, date: date, pdf: pdf, source: source)
@@ -100,7 +112,8 @@ enum SolutionPDF {
     try render(page: page, sources: source.map { [$0] } ?? [])
   }
   /// Thread-safe UIKit/CoreText drawing; run off the main actor so the UI stays responsive.
-  nonisolated static func render(page: SolvedPage, sources: [UIImage]) throws -> Data {
+  /// `titles` names each source photo, e.g. "page 2, part 1 of 3"; the PDF prints "Source photograph N · <title>".
+  nonisolated static func render(page: SolvedPage, sources: [UIImage], titles: [String] = []) throws -> Data {
     let body = NSMutableAttributedString(string: "")
     var keepWithNext: [NSRange] = []
     func append(_ text: String, size: CGFloat = 12, bold: Bool = false, color: UIColor = .black, keep: Bool = false) {
@@ -178,7 +191,8 @@ enum SolutionPDF {
       if offset < body.length { overflow = true }
       for (sourceIndex, source) in sources.enumerated() {
         renderer.beginPage(); chrome()
-        ("Source photograph \(sourceIndex + 1)" as NSString).draw(at: CGPoint(x: 44, y: 56), withAttributes: [.font: UIFont.boldSystemFont(ofSize: 18)])
+        let title = titles.indices.contains(sourceIndex) ? " · \(titles[sourceIndex])" : ""
+        ("Source photograph \(sourceIndex + 1)\(title)" as NSString).draw(at: CGPoint(x: 44, y: 56), withAttributes: [.font: UIFont.boldSystemFont(ofSize: 18)])
         let scale = min(524 / source.size.width, 636 / source.size.height)
         let size = CGSize(width: source.size.width * scale, height: source.size.height * scale)
         source.draw(in: CGRect(x: (612 - size.width) / 2, y: 94, width: size.width, height: size.height))

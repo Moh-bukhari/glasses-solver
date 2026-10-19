@@ -13,11 +13,24 @@ struct PageJobKey: Hashable, Sendable {
 struct PageJob: Sendable {
   let key: PageJobKey
   let number: Int
-  let primary: URL
-  let previous: URL?
-  let next: URL?
+  /// Every photo of the page to solve, in capture order: one still, or several close-ups of its parts.
+  let primaryFrames: [URL]
+  /// Context: the photos of the neighbors nearest this page (the previous page's last, the next page's first).
+  let previousFrames: [URL]
+  let nextFrames: [URL]
   /// Items this page skipped as belonging to the previous page, which that page did not solve.
   var mustSolve: [String] = []
+  init(key: PageJobKey, number: Int, primaryFrames: [URL], previousFrames: [URL], nextFrames: [URL], mustSolve: [String] = []) {
+    self.key = key; self.number = number; self.primaryFrames = primaryFrames
+    self.previousFrames = previousFrames; self.nextFrames = nextFrames; self.mustSolve = mustSolve
+  }
+  init(key: PageJobKey, number: Int, primary: URL, previous: URL?, next: URL?, mustSolve: [String] = []) {
+    self.init(key: key, number: number, primaryFrames: [primary], previousFrames: previous.map { [$0] } ?? [],
+      nextFrames: next.map { [$0] } ?? [], mustSolve: mustSolve)
+  }
+  var primary: URL { primaryFrames[0] }
+  var previous: URL? { previousFrames.last }
+  var next: URL? { nextFrames.first }
 }
 
 enum PagePlan {
@@ -262,15 +275,14 @@ actor PageSolver: PageSolving {
   }
 
   private func photos(for job: PageJob) throws -> [AIPhoto] {
-    var photos: [AIPhoto] = []
-    if let url = job.previous {
-      photos.append(AIPhoto(label: "PREVIOUS page (source page \(job.number - 1)), context only:", jpeg: try upload(url)))
+    func labeled(_ urls: [URL], _ title: String) throws -> [AIPhoto] {
+      try urls.enumerated().map { index, url in
+        AIPhoto(label: urls.count == 1 ? title + ":" : title + ", photo \(index + 1) of \(urls.count):", jpeg: try upload(url))
+      }
     }
-    photos.append(AIPhoto(label: "PRIMARY page (source page \(job.number)), solve this page:", jpeg: try upload(job.primary)))
-    if let url = job.next {
-      photos.append(AIPhoto(label: "NEXT page (source page \(job.number + 1)), context for continued questions only:", jpeg: try upload(url)))
-    }
-    return photos
+    return try labeled(job.previousFrames, "PREVIOUS page (source page \(job.number - 1)), context only")
+      + labeled(job.primaryFrames, "PRIMARY page (source page \(job.number)), solve this page")
+      + labeled(job.nextFrames, "NEXT page (source page \(job.number + 1)), context for continued questions only")
   }
   /// Each photo is downsized once and reused as primary and as neighbor context.
   private func upload(_ url: URL) throws -> Data {
@@ -281,8 +293,9 @@ actor PageSolver: PageSolving {
   }
 
   static func task(for job: PageJob) -> String {
+    let parts = job.primaryFrames.count < 2 ? "" : " The PRIMARY page is shown as \(job.primaryFrames.count) close-up photos of parts of the same sheet, in the order they were taken. They may overlap: an item seen in several photos is ONE item; read it from its clearest photo and join an item cut across photos. Neighbor pages may also be shown only in part."
     var text = """
-    Solve the PRIMARY page (source page \(job.number) of the packet). The images are labeled.
+    Solve the PRIMARY page (source page \(job.number) of the packet). The images are labeled.\(parts)
     OWNERSHIP RULE: every answerable item (a question, or each lettered/numbered subpart) belongs to the page where its OWN label first appears.
     \(job.previous == nil ? "There is no previous page." : "The PREVIOUS page provides shared stems, data and figures for items on the PRIMARY page.")
     \(job.next == nil ? "There is no next page: the PRIMARY page is the last page of the packet." : "Use the NEXT page only to finish an item whose own text is cut off at the bottom of the PRIMARY page.")

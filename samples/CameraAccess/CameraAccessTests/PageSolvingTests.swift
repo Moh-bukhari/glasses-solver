@@ -313,6 +313,27 @@ final class PageSolvingTests: XCTestCase {
     XCTAssertTrue(request.prompt.contains("never skip a subpart just because its parent question began earlier"))
     let last = PageJob(key: key, number: 3, primary: files[2], previous: files[1], next: nil)
     XCTAssertTrue(PageSolver.task(for: last).contains("There is no next page"))
+    XCTAssertFalse(request.prompt.contains("close-up photos"), "A single still needs no multi-photo note.")
+  }
+  func testAPageOfSeveralCloseUpsIsSentAsLabeledPartsWithNeighborContext() async throws {
+    let files = try (0..<6).map { _ in try photoFile() }
+    let key = PageJobKey(page: UUID(), previous: UUID(), next: UUID(), last: false, setup: "s")
+    let job = PageJob(key: key, number: 2, primaryFrames: Array(files[1...3]), previousFrames: [files[0]],
+      nextFrames: Array(files[4...5]))
+    let transport = ScriptedTransport([.success(valid())])
+    _ = try await fastSolver(transport).solve(job, configuration: openAI(), progress: { _ in })
+    let requests = await transport.requests
+    let request = try XCTUnwrap(requests.first)
+    XCTAssertEqual(request.photos.map(\.label), [
+      "PREVIOUS page (source page 1), context only:",
+      "PRIMARY page (source page 2), solve this page, photo 1 of 3:",
+      "PRIMARY page (source page 2), solve this page, photo 2 of 3:",
+      "PRIMARY page (source page 2), solve this page, photo 3 of 3:",
+      "NEXT page (source page 3), context for continued questions only, photo 1 of 2:",
+      "NEXT page (source page 3), context for continued questions only, photo 2 of 2:"])
+    XCTAssertTrue(request.prompt.contains("shown as 3 close-up photos"), request.prompt)
+    XCTAssertTrue(request.prompt.contains("an item seen in several photos is ONE item"))
+    XCTAssertEqual(job.primary, files[1]); XCTAssertEqual(job.previous, files[0]); XCTAssertEqual(job.next, files[4])
   }
   func testCrossCheckSolvesWithBothProvidersThenReconcilesWithTheLead() async throws {
     let transport = ScriptedTransport(Array(repeating: .success(valid()), count: 3))

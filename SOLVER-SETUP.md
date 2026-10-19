@@ -1,8 +1,8 @@
-# Glasses Solver 2.1: start from a shortcut, control everything with your thumb
+# Glasses Solver 2.2: fast live capture, start from a shortcut, control everything with your thumb
 
 You don't need to take out your phone during a scan. Start it with a shortcut (Action button, Back Tap, Control Center or Siri), scan by looking at each page, and use three thumb gestures. If the AI can't read a page, the glasses ask for that page again and then finish the PDF; you never have to tap Retake on the phone.
 
-Each page is solved in its own streaming request while you keep scanning. When you finish, only the last page is left, so the PDF arrives about one page-solve later. Directions play quietly through the glasses only. Voice commands and glasses buttons are off by default.
+2.2 no longer takes one slow full-resolution photo per page. It keeps the clearest moments of the live camera, several per page, so there's no pause between photos. Each question number is read on the phone and announced as it's captured, and a skipped number is asked for. Each page is solved in its own streaming request while you keep scanning. When you finish, only the last page is left, so the PDF arrives about one page-solve later. Directions play quietly through the glasses only. Voice commands and glasses buttons are off by default.
 
 ## Install from Windows
 
@@ -31,10 +31,13 @@ The phone must be unlocked, because the app has to be on screen for the glasses 
 ## Scan a packet
 
 1. Start with the shortcut (or tap **Start scanning**). You hear "Ready".
-2. Look at the first page, close enough that the small writing is readable. Quiet directions (left / right / tilt / closer / hold still) guide you.
-3. When the view is clear and steady, it takes the photo. You hear **"Got it"**, and you can turn the page right away while the photo transfers. Then **"Page 1 saved"**.
-4. Turn to the next page. New writing re-arms the camera automatically. Pages are solved in the background as you go.
-5. When you're done, give a **thumbs-up**. You hear "Done scanning. Solving." The PDF opens on the phone as soon as the last page is solved.
+2. Look closely at the top of the first page: about a hand's width of text at a time, close enough that the small writing is sharp. Hold still for about half a second. Quiet directions (left / right / tilt / closer / hold still) guide you.
+3. You hear each question number as it is captured ("Questions 1 and 2."). Move down the page to the next questions. If a number is skipped, you hear "Question 3 isn't captured yet. Look at it again."
+4. When nothing new has appeared for about 3 seconds, the page is saved: "Page 1 saved: 3 photos, questions 1 to 4." Or give 👉 to save it right away.
+5. Turn to the next page; new writing starts the next page automatically. Pages are solved in the background as you go.
+6. When you're done, give a **thumbs-up**. The page in front of you is saved first. You hear "Done scanning. Solving." The PDF opens on the phone as soon as the last page is solved.
+
+Prefer one big photo per page? Settings → Capture → **Full-resolution photo**. It is sharper for a whole page at arm's length, but each photo pauses the camera and takes several seconds.
 
 ## Hand gestures
 
@@ -43,7 +46,7 @@ Make a fist with your thumb straight out. Hold it in front of you, in the middle
 | Gesture | Meaning |
 | --- | --- |
 | 👍 Thumb **up** | **Start solution.** Finish scanning and make the PDF. |
-| 👉 Thumb to **your right** | **Next page.** Take the next page now (useful for look-alike pages), or take the page in view now. |
+| 👉 Thumb to **your right** | **Next page.** Save the page you're scanning now, or start the next page when a look-alike page wasn't noticed. |
 | 👈 Thumb to **your left** (👎 thumb down also works) | **Previous page.** Retakes the page you just scanned. Do it again to go one more page back. Turn back to that page and it's captured when steady; the old photo stays until the new one is clear. |
 
 - Thumb right is easiest with your right hand, and thumb left with your left hand, palm turned up or toward you. Keep the thumb level for left and right, and straight up or down for the others. Diagonal thumbs are ignored on purpose.

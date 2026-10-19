@@ -83,6 +83,7 @@ struct SolverSettingsView: View {
   @AppStorage("handGestures") private var gestures = true
   @AppStorage("glassesButtons") private var glassesButtons = false
   @AppStorage("solveWhileScanning") private var solveWhileScanning = true
+  @AppStorage("captureMode") private var captureMode = AutoScanModel.CaptureMode.frames.rawValue
   @State private var error: String?
   var body: some View {
     NavigationStack {
@@ -98,6 +99,15 @@ struct SolverSettingsView: View {
           Text(solveWhileScanning
             ? "Each page is uploaded and solved as soon as the next page is saved, so the PDF is ready moments after you finish."
             : "Nothing is uploaded until you finish; then all pages are solved at once.").font(.footnote)
+        }
+        Section("Capture") {
+          Picker("Photos", selection: $captureMode) {
+            Text("Live frames · fast").tag(AutoScanModel.CaptureMode.frames.rawValue)
+            Text("Full-resolution photo").tag(AutoScanModel.CaptureMode.photos.rawValue)
+          }
+          Text(captureMode == AutoScanModel.CaptureMode.photos.rawValue
+            ? "One 12-megapixel photo per page. Sharper for a whole page at arm's length, but each photo pauses the camera and takes several seconds."
+            : "Keeps the clearest moments of the live camera, several per page, with no pause between photos. Look closely at each part of the page; you hear each question number as it is captured.").font(.footnote)
         }
         if mode != .claude {
           Section("OpenAI") {
