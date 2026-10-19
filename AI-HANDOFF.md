@@ -120,6 +120,8 @@ What 2.5 does:
   - 400/403 means not allowed, and is remembered for the session.
   - A retryable 429/503/529 means busy, and is remembered after twice. A spend cap is never stepped down.
   - OpenAI's in-stream `service_tier` errors, and `response.failed` naming `service_tier`, are mapped to HTTP 400 so they step down instead of looking like a dropped stream.
+- **A failing key hands over.** If a provider's key, credit or spend limit fails (`AIServiceError.isAccountProblem`: 401/402, low credit, spend cap, invalid key), `PageSolver` solves with the other saved key, and `PageChecker` checks with it, for the rest of the session. This covers an old Claude key that migration 5 switched to. Save in Settings never stores a provider without a key, and a newly added Claude key becomes the provider.
+- **Lane memory.** Only a refusal that names the lane (service_tier, speed, fast mode) is remembered. Another 400/403 is resent once per lower lane and not remembered. Busy counts are per lane and reset when the lane answers. In-flight requests jump to the lowest lane already learned. OpenAI's Fast lane shares the Standard rate limit, so a 429 there is waited out instead of stepping down. These came from the 2.5 review.
 - **Cost.** Per the research's estimates: an Opus fast check is about $0.10-0.15, an Astra Ultrafast check about $0.60-0.90, and a solved page about $0.5-1 (Opus fast) or $3-5 (Astra Ultrafast). The user accepted cost.
 - **To measure on the device:** check and solve latency on both providers, and whether fast lanes are granted to the user's accounts. Opus fast needs the Start tier or above; Evaluation-tier organizations get 429s, which step down to standard. Also verify that Ultrafast accepts images and strict JSON (undocumented).
 

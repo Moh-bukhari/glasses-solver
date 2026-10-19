@@ -284,6 +284,44 @@ final class PageSolvingTests: XCTestCase {
       guard case .http(_, 400, _, _)? = $0 as? AIServiceError else { return XCTFail("\($0)") }
     }
   }
+  func testAFailingKeyHandsOverToTheOtherSavedKey() async throws {
+    // Solving: Claude's credit ran out, so OpenAI solves for the rest of the session.
+    let lowCredit = AIServiceError.http(provider: .claude, status: 400, retryAfter: nil,
+      detail: "Your credit balance is too low to access the Anthropic API.")
+    let transport = ScriptedTransport([.failure(lowCredit), .success(valid()), .success(valid())])
+    let solver = fastSolver(transport), both = SolverConfiguration(mode: .claude, openAIKey: "o", claudeKey: "c")
+    _ = try await solver.solve(try pageJob(), configuration: both, progress: { _ in })
+    _ = try await solver.solve(try pageJob(), configuration: both, progress: { _ in })
+    let providers = await transport.requests.map(\.credential.provider)
+    XCTAssertEqual(providers, [.claude, .openAI, .openAI], "No lane change or retry for a credit problem; the other key solves.")
+    let claudeOnly = ScriptedTransport([.failure(lowCredit)])
+    do { _ = try await fastSolver(claudeOnly).solve(try pageJob(), configuration: SolverConfiguration(mode: .claude, claudeKey: "c"),
+      progress: { _ in }); XCTFail("Without another key the error is shown") } catch {}
+    // Checking: a revoked Claude key hands page checks to the OpenAI key that solves.
+    let revoked = AIServiceError.http(provider: .claude, status: 401, retryAfter: nil, detail: "invalid x-api-key")
+    let checks = ScriptedTransport([.failure(revoked), .success(checkAnswer()), .success(checkAnswer())])
+    let checker = PageChecker(transport: checks, retryDelay: .milliseconds(1))
+    let openAIFirst = SolverConfiguration(mode: .openAI, openAIKey: "o", claudeKey: "c")
+    _ = try await checker.check([Data([1])], page: 1, reference: nil, configuration: openAIFirst)
+    _ = try await checker.check([Data([1])], page: 2, reference: nil, configuration: openAIFirst)
+    let checked = await checks.requests.map(\.credential.model)
+    XCTAssertEqual(checked, ["claude-opus-5-5", "gpt-6-astra", "gpt-6-astra"])
+  }
+  func testOnlyLaneRefusalsAreRememberedAndOpenAIFastWaitsOutItsRateLimit() async throws {
+    let image = AIServiceError.http(provider: .openAI, status: 400, retryAfter: nil, detail: "Invalid image: too large")
+    let transport = ScriptedTransport([.failure(image), .failure(image), .failure(image), .success(valid())])
+    let solver = fastSolver(transport), configuration = SolverConfiguration(openAIKey: "o")
+    do { _ = try await solver.solve(try pageJob(), configuration: configuration, progress: { _ in }); XCTFail("Still a bad request") } catch {}
+    _ = try await solver.solve(try pageJob(), configuration: configuration, progress: { _ in })
+    var tiers = await transport.requests.map(\.tier)
+    XCTAssertEqual(tiers, [.ultrafast, .fast, .standard, .ultrafast], "An unrelated 400 doesn't give up the fast lane for later pages.")
+    let limited = AIServiceError.http(provider: .openAI, status: 429, retryAfter: nil, detail: "rate_limit_exceeded")
+    let fast = ScriptedTransport([.failure(limited), .success(valid())])
+    _ = try await fastSolver(fast).solve(try pageJob(), configuration: SolverConfiguration(openAIKey: "o", openAIModel: "gpt-6-luna"),
+      progress: { _ in })
+    tiers = await fast.requests.map(\.tier)
+    XCTAssertEqual(tiers, [.fast, .fast], "Fast shares Standard's rate limit: retry, don't drop the lane.")
+  }
   func testAPageCheckVerdictMustAgreeWithItsEvidence() {
     func item(_ label: String, read: String = "", unclear: String = "") -> PageCheck.Item { .init(label: label, read: read, unclear: unclear) }
     func check(_ questions: [PageCheck.Item], unseen: String = "", verdict: String = "solvable", voice: String = "",

@@ -36,7 +36,10 @@ enum SpeedTier: Int, Sendable, Comparable {
 }
 
 /// The speed tier each provider and model accepted this session. A refused tier steps down at once instead of
-/// waiting: not allowed (400/403) is remembered; busy (429/503/529) is remembered after it happens twice.
+/// waiting. A refusal that names the lane (service_tier, speed, fast mode) is remembered; another 400/403 is resent once
+/// on the lower lane without being remembered (Claude's fast-mode error text is undocumented). A busy lane (429/503/529,
+/// or an overload inside the stream) is remembered after it refuses twice in a row. OpenAI's Fast lane shares the
+/// Standard rate limit, so a 429 there is waited out by the normal retry instead.
 struct TierMemory: Sendable {
   private var chosen: [String: SpeedTier] = [:]
   private var busy: [String: Int] = [:]
@@ -48,15 +51,30 @@ struct TierMemory: Sendable {
   }
   /// The tier to resend the same request at, or nil when `error` is not a refusal of `tier`.
   mutating func stepDown(after error: any Error, from tier: SpeedTier, credential: AICredential) -> SpeedTier? {
-    guard let lower = tier.lower, let service = error as? AIServiceError, case .http(_, let status, _, _) = service else { return nil }
-    let key = key(credential)
-    if [400, 403].contains(status) { chosen[key] = lower; return lower }
-    // A spend cap or exhausted credit is not about speed: it fails the same way on every lane.
-    guard [429, 503, 529].contains(status), service.isRetryable else { return nil }
-    busy[key, default: 0] += 1
-    if busy[key, default: 0] >= 2 { chosen[key] = lower }
-    return lower
+    guard let lower = tier.lower, let service = error as? AIServiceError, !service.isAccountProblem else { return nil }
+    let key = key(credential), busyKey = "\(key)|\(tier.rawValue)"
+    func remember() { chosen[key] = min(chosen[key] ?? lower, lower) }
+    // Requests in flight together jump to the lowest lane another one already learned.
+    func next() -> SpeedTier { min(lower, self.tier(for: credential, fast: true)) }
+    switch service {
+    case .http(_, let status, _, let detail) where [400, 403].contains(status):
+      let text = detail.lowercased()
+      if ["service_tier", "speed", "fast mode", "fast-mode", "ultrafast"].contains(where: text.contains) { remember() }
+      return next()
+    case .http(_, let status, _, _) where [429, 503, 529].contains(status):
+      if credential.provider == .openAI && tier == .fast && status == 429 { return nil }
+    case .interrupted(_, let detail)
+      where ["overloaded_error", "rate_limit_error", "rate_limit_exceeded", "overloaded"].contains(detail):
+      break
+    default:
+      return nil
+    }
+    busy[busyKey, default: 0] += 1
+    if busy[busyKey, default: 0] >= 2 { remember() }
+    return next()
   }
+  /// A lane that answered is not busy any more.
+  mutating func succeeded(_ credential: AICredential, tier: SpeedTier) { busy["\(key(credential))|\(tier.rawValue)"] = nil }
 }
 struct SolverConfiguration: Sendable {
   /// The most accurate readers of each provider (Roboflow OCR, 2026-10): Claude Opus 5.5, then GPT-6 Astra.
@@ -85,6 +103,12 @@ struct SolverConfiguration: Sendable {
     return AICredential(provider: provider, key: credential(provider).key, model: Self.checkModel(provider))
   }
   static func checkModel(_ provider: AIProvider) -> String { provider == .claude ? "claude-opus-5-5" : "gpt-6-astra" }
+  /// The other provider, when its key is saved: used for the rest of a session if this provider's key, credit or spend
+  /// limit fails (for example an old Claude key that the 2.5 settings switch moved solving to).
+  func alternative(to provider: AIProvider) -> AIProvider? {
+    let other: AIProvider = provider == .claude ? .openAI : .claude
+    return credential(other).key.isEmpty ? nil : other
+  }
   func credential(_ provider: AIProvider) -> AICredential {
     AICredential(provider: provider, key: (provider == .openAI ? openAIKey : claudeKey).trimmed,
       model: (provider == .openAI ? openAIModel : claudeModel).trimmed)
@@ -111,6 +135,15 @@ enum AIServiceError: LocalizedError, Equatable {
   /// A stream ended early, or the provider reported an overload/server error inside an accepted stream.
   case interrupted(provider: AIProvider, detail: String)
 
+  /// The key, billing, credit or permission is the problem: no lane, retry or model change will fix it, but the other
+  /// provider's key might.
+  var isAccountProblem: Bool {
+    guard case .http(_, let status, _, let detail) = self else { return false }
+    if [401, 402].contains(status) { return true }
+    let text = detail.lowercased()
+    return ["insufficient_quota", "enforced_spend_limit_reached", "credit balance", "spend limit", "invalid x-api-key",
+      "invalid_api_key", "authentication_error"].contains(where: text.contains)
+  }
   var isRetryable: Bool {
     switch self {
     case .interrupted: return true
@@ -132,6 +165,7 @@ enum AIServiceError: LocalizedError, Equatable {
       case 402: hint = "Check your \(provider.name) billing."
       case 429: hint = detail.contains("insufficient_quota") || detail.contains("enforced_spend_limit_reached")
         ? "Your \(provider.name) credit or spend limit is used up." : "Check your \(provider.name) API credit or rate limit."
+      case 400 where isAccountProblem: hint = "Your \(provider.name) credit or spend limit is used up."
       case 400, 404: hint = "Check the \(provider.name) model name and its vision/structured-output support."
       case 413: hint = "A page photo is too large; replace it with a smaller photo."
       default: hint = "Your pages are saved. Retry when the service is available."

@@ -246,6 +246,8 @@ actor PageChecker: PageChecking {
   private let transport: any AITransport
   private let retryDelay: Duration
   private var useConfiguredModel: Set<AIProvider> = []
+  /// Providers whose key, credit or spend limit failed this session; the other saved key checks pages instead.
+  private var failedAccounts: Set<AIProvider> = []
   private var tiers = TierMemory()
   init(transport: any AITransport = SolverClient(), retryDelay: Duration = .seconds(1)) {
     self.transport = transport; self.retryDelay = retryDelay
@@ -262,12 +264,16 @@ actor PageChecker: PageChecking {
     var retried = false, lowered: SpeedTier?
     while true {
       try Task.checkCancellation()
-      let preferred = configuration.checkCredential, configured = configuration.credential(preferred.provider)
-      let credential = useConfiguredModel.contains(preferred.provider) ? configured : preferred
+      var provider = configuration.checkCredential.provider
+      if failedAccounts.contains(provider), let other = configuration.alternative(to: provider) { provider = other }
+      let configured = configuration.credential(provider)
+      let preferred = AICredential(provider: provider, key: configured.key, model: SolverConfiguration.checkModel(provider))
+      let credential = useConfiguredModel.contains(provider) ? configured : preferred
       let tier = lowered ?? tiers.tier(for: credential, fast: configuration.fastTiers)
       let request = AIRequest(credential: credential, photos: labeled, prompt: prompt, tokenLimit: 8_000, kind: .check, tier: tier)
       do {
         let data = try await transport.send(request)
+        tiers.succeeded(credential, tier: tier)
         guard let check = try? JSONDecoder().decode(PageCheck.self, from: data) else {
           throw AIResultError.repairable("The page check returned an unexpected answer.")
         }
@@ -275,7 +281,11 @@ actor PageChecker: PageChecking {
       } catch {
         if let lower = tiers.stepDown(after: error, from: tier, credential: credential) { lowered = lower; continue }
         if credential.model != configured.model, Self.modelUnavailable(error) {
-          useConfiguredModel.insert(preferred.provider); lowered = nil; continue
+          useConfiguredModel.insert(provider); lowered = nil; continue
+        }
+        if (error as? AIServiceError)?.isAccountProblem == true, !failedAccounts.contains(provider),
+          configuration.alternative(to: provider) != nil {
+          failedAccounts.insert(provider); lowered = nil; continue
         }
         guard !retried, !Task.isCancelled, PageSolver.isTransient(error) else { throw error }
         retried = true
@@ -319,6 +329,7 @@ actor AsyncLimiter {
 actor PageSolver: PageSolving {
   private let transport: any AITransport
   private var tiers = TierMemory()
+  private var failedAccounts: Set<AIProvider> = []
   private let retryDelays: [Duration]
   private let limiter: AsyncLimiter
   private var uploads: [URL: Data] = [:]
@@ -332,6 +343,24 @@ actor PageSolver: PageSolving {
   func solve(_ job: PageJob, configuration: SolverConfiguration,
              progress: @escaping @Sendable (String) -> Void) async throws -> PageResult {
     try configuration.validate()
+    // One provider at a time: if its key, credit or spend limit fails, the other saved key solves for the session.
+    var configuration = configuration
+    if configuration.mode != .both, failedAccounts.contains(configuration.lead.provider),
+      let other = configuration.alternative(to: configuration.lead.provider) {
+      configuration.mode = other == .claude ? .claude : .openAI
+    }
+    do { return try await solveOnce(job, configuration: configuration, progress: progress) }
+    catch let error as AIServiceError where error.isAccountProblem && configuration.mode != .both {
+      let failed = configuration.lead.provider
+      guard let other = configuration.alternative(to: failed) else { throw error }
+      failedAccounts.insert(failed); configuration.mode = other == .claude ? .claude : .openAI
+      progress("\(job.title): \(failed.name) can't be used (\(error.localizedDescription)) Solving with \(other.name) instead.")
+      return try await solveOnce(job, configuration: configuration, progress: progress)
+    }
+  }
+
+  private func solveOnce(_ job: PageJob, configuration: SolverConfiguration,
+                         progress: @escaping @Sendable (String) -> Void) async throws -> PageResult {
     let photos = try photos(for: job), task = Self.task(for: job), lead = configuration.lead
     let mustSolve = job.mustSolve, fast = configuration.fastTiers
     guard let peer = configuration.peer else {
@@ -387,6 +416,7 @@ actor PageSolver: PageSolving {
       do {
         let data = try await transport.send(request)
         await limiter.release()
+        tiers.succeeded(request.credential, tier: request.tier)
         return data
       } catch {
         await limiter.release()

@@ -170,9 +170,14 @@ struct SolverSettingsView: View {
         if let error { Text(error).foregroundStyle(.red) }
         Button("Save settings") {
           do {
+            let addedClaude = SolverKeychain.read(.claude).isEmpty && !claudeKey.trimmed.isEmpty
             try SolverKeychain.save(key.trimmed, provider: .openAI)
             try SolverKeychain.save(claudeKey.trimmed, provider: .claude)
             let defaults = UserDefaults.standard
+            // The chosen provider must have a key; a newly added Claude key solves (Claude Opus 5.5 reads best).
+            var mode = self.mode
+            if mode == .openAI && (key.trimmed.isEmpty || addedClaude) && !claudeKey.trimmed.isEmpty { mode = .claude }
+            if mode == .claude && claudeKey.trimmed.isEmpty && !key.trimmed.isEmpty { mode = .openAI }
             defaults.set(mode.rawValue, forKey: "solverMode"); defaults.set(model.trimmed, forKey: "solverModel")
             defaults.set(claudeModel.trimmed, forKey: "claudeModel"); dismiss()
           } catch { self.error = error.localizedDescription }
