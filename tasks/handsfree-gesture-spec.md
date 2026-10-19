@@ -47,7 +47,7 @@ What failed in 2.0: glasses buttons (Meta's experimental Inputs) did not reach t
 - **URL.** `glassessolver://scan` does the same, as a fallback for a personal "Open URLs" shortcut.
 - **Behavior.** The request switches to the Auto Scan tab and starts once the scene is active: it continues an unsolved packet, or starts a new one after a PDF. A second request while scanning or solving only announces it.
 - **Phone side button.** Not assignable by apps. Camera Control needs a LockedCameraCapture extension and is out of scope.
-- **Glasses.** A "Hey Meta" voice invocation is an experimental DAT feature that needs Developer Center approval; it is documented as an option, not implemented.
+- **Glasses.** DAT 1.0.1 cannot start an app silently from the glasses; every silent signal needs a session the phone app already started. The only glasses-side launch is the experimental "Hey Meta, start Glasses Solver" voice invocation, which needs a Wearables Developer Center app with the Voice Invocation permission approved. It is documented in the handoff as an option, not implemented.
 
 ## Verification
 
