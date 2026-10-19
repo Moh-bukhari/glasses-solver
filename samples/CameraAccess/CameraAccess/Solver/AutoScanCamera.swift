@@ -15,6 +15,8 @@ protocol ScanCamera: AnyObject {
   /// Clicks on the glasses (experimental Meta Inputs), already mapped to scan commands.
   var onCommand: ((ScanCommand) -> Void)? { get set }
   var glassesButtons: Bool { get set }
+  /// False once glasses buttons are switched off or reported unavailable for this scan.
+  var buttonsAvailable: Bool { get }
   func start() async throws
   func resumePreview() async throws
   func capture() async throws -> Data
@@ -80,6 +82,7 @@ final class AutoScanCamera: ScanCamera {
   private var lastCommand: (command: ScanCommand, at: ContinuousClock.Instant)?
   /// Integration-test hook: glasses buttons are attached and delivering.
   var inputsActive: Bool { inputs?.state == .active }
+  var buttonsAvailable: Bool { glassesButtons && !inputsUnavailable }
 
   init(wearables: WearablesInterface) {
     self.wearables = wearables

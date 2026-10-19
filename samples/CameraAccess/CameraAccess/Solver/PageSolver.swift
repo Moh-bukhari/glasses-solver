@@ -102,11 +102,14 @@ struct PageResult: Codable, Sendable {
       skipped: skipped)
   }
   static func normalized(_ label: String) -> String { label.lowercased().filter { $0.isLetter || $0.isNumber } }
-  /// Ignores a word prefix such as "Q" or "Problem" so "Q3(b)" and "3b" match.
+  /// Ignores a word prefix such as "Q" or "Problem" so "Q3(b)" and "3b" match; section letters ("A1", "B1") stay distinct.
   static func loose(_ label: String) -> String {
     let value = normalized(label)
-    guard let digit = value.firstIndex(where: \.isNumber) else { return value }
-    return String(value[digit...])
+    for prefix in ["question", "problem", "exercise", "number", "prob", "ex", "no", "q"] where value.hasPrefix(prefix) {
+      let rest = value.dropFirst(prefix.count)
+      if rest.first?.isNumber == true { return String(rest) }
+    }
+    return value
   }
 
   /// `mustCover` holds labels an earlier draft solved (cross-check); `mustSolve` labels must be solved here.
@@ -132,10 +135,12 @@ struct PageResult: Codable, Sendable {
     let looseCovered = Set(covered.map(Self.loose))
     // A question number whose lettered subparts are all answered ("3" with "3(a)", "3(b)") is covered.
     func isCovered(_ label: String) -> Bool {
-      let value = Self.normalized(label)
-      if covered.contains(value) || looseCovered.contains(Self.loose(label)) { return true }
-      return covered.contains { $0.count > value.count && $0.hasPrefix(value)
-        && $0[$0.index($0.startIndex, offsetBy: value.count)].isLetter }
+      let value = Self.normalized(label), relaxed = Self.loose(label)
+      if covered.contains(value) || looseCovered.contains(relaxed) { return true }
+      func parent(_ prefix: String, of child: String) -> Bool {
+        child.count > prefix.count && child.hasPrefix(prefix) && child[child.index(child.startIndex, offsetBy: prefix.count)].isLetter
+      }
+      return covered.contains { parent(value, of: $0) } || looseCovered.contains { parent(relaxed, of: $0) }
     }
     let missing = checklist.filter { !isCovered($0) } + mustCover.filter { !looseCovered.contains(Self.loose($0)) }.sorted()
     guard missing.isEmpty else {

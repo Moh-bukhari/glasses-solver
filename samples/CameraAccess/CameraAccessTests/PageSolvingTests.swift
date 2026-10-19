@@ -48,6 +48,9 @@ final class PageSolvingTests: XCTestCase {
     let combined = try PagePlan.combine([(1, result([missingData]))], providers: "fixture")
     XCTAssertEqual(combined.problems[0].answer, "—"); XCTAssertFalse(combined.problems[0].steps.isEmpty)
     XCTAssertNoThrow(try result([item("3(b)", "x", page: 1)]).validate(page: 1, mustCover: ["Q3(b)"]), "Cross-check drafts may spell labels differently.")
+    XCTAssertEqual(PageResult.loose("Problem 4(c)"), "4c")
+    XCTAssertNotEqual(PageResult.loose("A1"), PageResult.loose("B1"), "Section letters are part of the label.")
+    XCTAssertNoThrow(try result([item("Q3(a)", "x", page: 1)], checklist: ["3"]).validate(page: 1))
     // A must-solve item that is missing or skipped again is sent back for repair.
     XCTAssertThrowsError(try result([item("1(a)", "x", page: 2)], checklist: ["1(a)"]).validate(page: 2, mustSolve: ["5(b)"]))
     let skippedClaim = PageResult(readable: true, retake: "", title: "T", checklist: ["5(b)"], solutions: [],

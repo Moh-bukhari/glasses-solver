@@ -291,7 +291,8 @@ final class AutoScanModel {
           else if time - awaitingSince > 6, value.acceptable, !nextHintGiven {
             // Look-alike pages may not register as a page turn.
             nextHintGiven = true
-            say("If this is a new page, press the capture button, or tap Next page on the phone.")
+            say(camera.buttonsAvailable ? "If this is a new page, press the capture button, or tap Next page on the phone."
+              : "If this is a new page, tap Next page now on the phone.")
           }
           return
         }

@@ -60,6 +60,9 @@ struct CameraAccessApp: App {
     }
     #endif
 
+    // Apply 2.0 defaults (requested models, voice commands off) before any view reads settings.
+    SolverKeychain.migrateDefaults()
+
     let wearables = Wearables.shared
     self.wearables = wearables
     self._wearablesViewModel = State(wrappedValue: WearablesViewModel(wearables: wearables))
