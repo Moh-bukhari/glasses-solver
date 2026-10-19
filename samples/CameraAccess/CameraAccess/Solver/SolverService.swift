@@ -60,7 +60,7 @@ struct SolutionStore: SolutionSaving {
         guard let image = UIImage(data: data) else { throw SolverError.message("A source photo is unreadable.") }
         return image
       }
-      let data = try SolutionPDF.render(page: page, sources: images)
+      let data = try await Task.detached(priority: .userInitiated) { try SolutionPDF.render(page: page, sources: images) }.value
       try data.write(to: pdf, options: .atomic)
       for (index, original) in sources.enumerated() {
         let path = index == 0 ? source : folder.appendingPathComponent("Paper-\(index + 1).jpg")
@@ -96,10 +96,11 @@ enum SolutionPDF {
       else { throw SolverError.message("A source photo is unreadable.") }
     return try PageAnalyzer.encodeJPEG(image, quality: 0.82)
   }
-  static func render(page: SolvedPage, source: UIImage?) throws -> Data {
+  nonisolated static func render(page: SolvedPage, source: UIImage?) throws -> Data {
     try render(page: page, sources: source.map { [$0] } ?? [])
   }
-  static func render(page: SolvedPage, sources: [UIImage]) throws -> Data {
+  /// Thread-safe UIKit/CoreText drawing; run off the main actor so the UI stays responsive.
+  nonisolated static func render(page: SolvedPage, sources: [UIImage]) throws -> Data {
     let body = NSMutableAttributedString(string: "")
     var keepWithNext: [NSRange] = []
     func append(_ text: String, size: CGFloat = 12, bold: Bool = false, color: UIColor = .black, keep: Bool = false) {

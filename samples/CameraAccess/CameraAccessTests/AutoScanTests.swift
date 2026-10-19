@@ -526,6 +526,36 @@ final class AutoScanTests: XCTestCase {
     await waitUntil { model.phase == .finished }
     XCTAssertEqual(saver.saves, 1); XCTAssertEqual(camera.captures, 2); model.stop()
   }
+  func testFinishDuringCaptureStillSolvesWhenThatPhotoIsUnclear() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: goodSample()), solver = FakePageSolver(), saver = FakeSolutionSaver()
+    let model = makeModel(camera, analyzer, solver, saver)
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await sendStableFrames(camera, model: model)
+    await waitUntil { model.phase == .awaitingNext }
+    await analyzer.rejectNextStill()
+    camera.captureHook = { [weak model] in model?.handle(.finish) }
+    model.handle(.next)
+    try await sendStableFrames(camera, model: model)
+    await waitUntil { model.phase == .finished }
+    XCTAssertEqual(model.phase, .finished, "A finish requested mid-capture must not strand the scan. \(model.guide)")
+    XCTAssertEqual(camera.captures, 2); XCTAssertEqual(saver.sourceCount, 1, "The unclear photo is not added.")
+    model.stop()
+  }
+  func testRetakingAnEarlierPageWaitsInsteadOfAppendingTheNextSheet() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let solver = FakePageSolver(), saver = FakeSolutionSaver()
+    let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), solver, saver)
+    for count in 1...3 { model.importPhoto(camera.data); await waitUntil { model.pages.count == count && model.phase == .idle } }
+    let original = model.pages.map(\.id)
+    model.start(replacing: 0); await waitUntil { model.phase == .seeking }
+    try await sendStableFrames(camera, model: model)
+    await waitUntil { model.phase == .idle && model.pages.first?.id != original[0] }
+    XCTAssertEqual(model.phase, .idle, model.guide)
+    XCTAssertEqual(model.pages.count, 3); XCTAssertEqual(Array(model.pages.map(\.id).dropFirst()), Array(original.dropFirst()))
+    XCTAssertTrue(model.guide.contains("replaced"), model.guide)
+    model.stop()
+  }
   func testFailedPageIsRetriedAloneAndSolvedPagesAreKept() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
     let solver = FakePageSolver(failFirstAttemptOfPage: 1), saver = FakeSolutionSaver()
@@ -649,18 +679,21 @@ private final class FakeScanCamera: ScanCamera {
   var onCommand: ((ScanCommand) -> Void)?
   var glassesButtons = true
   let data: Data
-  var captures = 0, resumes = 0, starts = 0, shutters = 0
+  var captures = 0, resumes = 0, starts = 0, shutters = 0, stops = 0
+  /// Runs while the model is in `.capturing`, e.g. to send a command mid-capture.
+  var captureHook: (() -> Void)?
   init(data: Data) { self.data = data }
   func start() async throws { starts += 1 }
   func resumePreview() async throws { resumes += 1 }
-  func capture() async throws -> Data { captures += 1; shutters += 1; onShutter?(); return data }
-  func stop() {}
+  func capture() async throws -> Data { captures += 1; shutters += 1; onShutter?(); captureHook?(); return data }
+  func stop() { stops += 1 }
 }
 private actor FakePageAnalyzer: PageAnalyzing {
   var sample: PageSample
   var rejectFirstStill: Bool
   init(sample: PageSample, rejectFirstStill: Bool = false) { self.sample = sample; self.rejectFirstStill = rejectFirstStill }
   func setGesture(_ gesture: HandGesture?) { sample.gesture = gesture }
+  func rejectNextStill() { rejectFirstStill = true }
   func analyze(_ image: CGImage, still: Bool) async throws -> PageSample { sample }
   func prepare(_ data: Data) async throws -> PreparedPhoto {
     var value = sample; value.gesture = nil

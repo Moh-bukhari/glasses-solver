@@ -8,7 +8,7 @@ struct AutoScanView: View {
   var initialImage: UIImage? = nil
   var importOnly = false
   @Environment(\.scenePhase) private var scenePhase
-  @State private var model = AutoScanModel(camera: AutoScanCamera(wearables: Wearables.shared))
+  @State private var model = AutoScanModel.shared
   @State private var settings = false
   @State private var selection: PhotosPickerItem?
   @State private var importError: String?
@@ -80,9 +80,13 @@ struct AutoScanView: View {
       }
       .task {
         model.reloadDraft(); applySettings()
-        if !importedInitial, let initialImage, let data = initialImage.jpegData(compressionQuality: 0.95), model.phase == .idle {
-          importedInitial = true
-          model.importPhoto(data)
+        if !importedInitial, let initialImage, let data = initialImage.jpegData(compressionQuality: 0.95) {
+          if model.isRunning {
+            importError = "A packet is being scanned or solved. Add this photo when it finishes."
+          } else {
+            importedInitial = true
+            model.importPhoto(data)
+          }
         }
       }
       .onChange(of: model.needsKey) { _, needed in if needed { settings = true } }
@@ -106,8 +110,10 @@ struct AutoScanView: View {
       Button("Next page now") { model.nextPage() }.buttonStyle(.bordered)
     }
     if model.isRunning {
-      Button(model.isCollecting ? "Pause scanning" : "Stop · keep saved pages", role: .destructive) { model.stop() }
-        .buttonStyle(.bordered)
+      if model.phase != .saving {
+        Button(model.isCollecting ? "Pause scanning" : "Stop · keep saved pages", role: .destructive) { model.pause() }
+          .buttonStyle(.bordered)
+      }
     } else {
       if !importOnly && model.pages.count < AutoScanModel.maxPages {
         if let wearablesVM, wearablesVM.registrationState != .registered {
@@ -156,6 +162,12 @@ struct AutoScanView: View {
     default: return "viewfinder"
     }
   }
+}
+
+extension AutoScanModel {
+  /// One coordinator owns the draft: the Auto Scan tab and the photo-import sheet share it, so solving that
+  /// continues across tabs never races a second model over the same pages.
+  static let shared = AutoScanModel(camera: AutoScanCamera(wearables: Wearables.shared))
 }
 
 /// Reads the per-frame preview in its own view so the page queue does not re-render on every frame.

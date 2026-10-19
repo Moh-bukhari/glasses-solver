@@ -46,6 +46,8 @@ final class AutoScanModel {
   @ObservationIgnored private let voice: any ScanSpeaking
   @ObservationIgnored private var worker: Task<Void, Never>?
   @ObservationIgnored private var analysisTask: Task<Void, Never>?
+  @ObservationIgnored private var previewTask: Task<Void, any Error>?
+  @ObservationIgnored private var cameraProblem: String?
   @ObservationIgnored private var runID = UUID()
   @ObservationIgnored private var gate = StabilityGate()
   @ObservationIgnored private var turnGate = PageTurnGate()
@@ -79,8 +81,11 @@ final class AutoScanModel {
     camera.onFrame = { [weak self] image in self?.receive(image) }
     camera.onProblem = { [weak self] message in
       guard let self, self.isRunning else { return }
-      if [.checking, .solving, .saving].contains(self.phase) { self.camera.stop() }
-      else { self.fail(message + " Your saved pages are kept.") }
+      if [.checking, .solving, .saving].contains(self.phase) {
+        // A hands-free check finishes saving its photo, then stops with this message instead of waiting forever.
+        if self.phase == .checking, !self.imported { self.cameraProblem = message }
+        self.cancelPreviewRestart(); self.camera.stop()
+      } else { self.fail(message + " Your saved pages are kept.") }
     }
     camera.onProgress = { [weak self] fraction in
       guard let self, self.phase == .capturing else { return }
@@ -103,8 +108,7 @@ final class AutoScanModel {
     if let index, !pages.indices.contains(index) { return }
     begin(imported: false); replacing = index
     planFinal = false
-    let configuration = configurationProvider()
-    solveSetup = solveWhileScanning && (try? configuration.validate()) != nil ? configuration : nil
+    refreshSolveSetup()
     syncJobs()
     let id = runID
     phase = .connecting; guide = "Connecting to your glasses…"
@@ -134,6 +138,7 @@ final class AutoScanModel {
     guard !isRunning, pages.count < Self.maxPages || index != nil else { return }
     if let index, !pages.indices.contains(index) { return }
     begin(imported: true); replacing = index
+    refreshSolveSetup()
     let id = runID; phase = .checking; guide = "Checking the selected photo…"
     worker = Task { [weak self] in await self?.process(data: data, id: id) }
   }
@@ -171,7 +176,7 @@ final class AutoScanModel {
     guard !isRunning else { return }
     do {
       pages = try draft.remove(at: index, from: pages); pruneThumbnails()
-      guide = "\(pages.count) pages saved."; syncJobs()
+      guide = "\(pages.count) pages saved."; refreshSolveSetup(); syncJobs()
     } catch { guide = "Could not remove the saved page. \(error.localizedDescription)" }
   }
   func reloadDraft() {
@@ -184,9 +189,16 @@ final class AutoScanModel {
     result = nil; capturedPreview = nil; preview = nil; phase = .idle
     guide = "Ready for a new packet. Tap Start."
   }
-  /// User pause/stop: ends scanning and any solving in progress. Finished page results stay cached.
+  /// Pause while collecting keeps page solves running; it only stops the camera.
+  func pause() {
+    if isCollecting || phase == .connecting { pauseScanning("Paused. \(pages.count) pages saved; solving continues.") }
+    else { stop() }
+  }
+  /// User stop: ends scanning and any solving in progress. Finished page results stay cached.
+  /// Ignored while the PDF is written, so a finished file is never orphaned.
   func stop() {
-    runID = UUID(); worker?.cancel(); analysisTask?.cancel()
+    guard phase != .saving else { return }
+    runID = UUID(); worker?.cancel(); analysisTask?.cancel(); cancelPreviewRestart()
     worker = nil; analysisTask = nil
     for job in jobs.values { job.task.cancel() }
     jobs = [:]
@@ -197,6 +209,7 @@ final class AutoScanModel {
   }
   /// Leaving the screen stops the camera but never cancels page solving or PDF creation.
   func backgrounded() {
+    if !jobs.isEmpty { beginBackgroundWork() } // let page solves in flight finish while iOS allows
     guard isCollecting else { return } // `connecting` may hand off to Meta AI for permission
     pauseScanning("Paused when the app left the screen. Your pages are saved; tap Continue when ready.")
   }
@@ -205,13 +218,13 @@ final class AutoScanModel {
     pauseScanning("Scanning paused. Your pages are saved.")
   }
   private func pauseScanning(_ message: String) {
-    runID = UUID(); worker?.cancel(); analysisTask?.cancel(); worker = nil; analysisTask = nil
+    runID = UUID(); worker?.cancel(); analysisTask?.cancel(); cancelPreviewRestart(); worker = nil; analysisTask = nil
     camera.stop(); gate.reset(); turnGate.reset(); gestureGate.reset(); voice.stopCommands()
     phase = .idle; progress = 0; guide = message; restoreIdleTimer()
   }
 
   private func begin(imported: Bool) {
-    runID = UUID(); worker?.cancel(); analysisTask?.cancel(); analysisTask = nil
+    runID = UUID(); worker?.cancel(); analysisTask?.cancel(); analysisTask = nil; cancelPreviewRestart(); cameraProblem = nil
     camera.stop(); voice.stopCommands(); voice.stopSpeaking()
     gate.reset(); turnGate.reset(); speechGate.reset(); gestureGate.reset()
     self.imported = imported; replacing = nil; finishRequested = false; forceCapture = false; captureFailures = 0
@@ -300,6 +313,7 @@ final class AutoScanModel {
   }
   /// A dropped transfer is retried by looking at the page again; repeated failures stop with the pages kept.
   private func captureFailed(_ error: any Error, id: UUID) async {
+    if finishRequested, !pages.isEmpty { finishRequested = false; phase = .idle; finishScanning(); return }
     captureFailures += 1
     guard captureFailures < 3, !(error is CancellationError) else { fail(error.localizedDescription); return }
     guide = "The photo didn't come through. Show page \((replacing ?? pages.count) + 1) again."; say(guide)
@@ -311,21 +325,35 @@ final class AutoScanModel {
 
   private func process(data: Data, id: UUID) async {
     // Restart the preview while the still is checked and saved; it is ready for the next page sooner.
-    let restart: Task<Void, any Error>? = imported || finishRequested ? nil : Task { [weak self] in
-      guard let self else { return }
-      try await self.resume(id: id)
+    cancelPreviewRestart()
+    if !imported && !finishRequested {
+      previewTask = Task { [weak self] in
+        guard let self else { return }
+        try await self.resume(id: id)
+      }
     }
+    let restart = previewTask
     do {
       phase = .checking; progress = 0
       if !guide.hasPrefix("Got it") { guide = "Checking the photo for clear writing…" }
       let photo = try await analyzer.prepare(data)
       try Task.checkCancellation(); guard runID == id else { restart?.cancel(); return }
       if !photo.sample.acceptable || !photo.sample.closeEnough {
-        try await restart?.value; guard runID == id else { return }
-        try retake(photo.sample.issue ?? "Move closer so the small writing is readable.")
+        let reason = photo.sample.issue ?? "Move closer so the small writing is readable."
+        if finishRequested, !pages.isEmpty {
+          // The wearer already asked to finish: solve the saved pages instead of waiting on a retake.
+          restart?.cancel(); finishRequested = false; phase = .idle
+          finishScanning(); say("The last photo wasn't clear, so it was skipped. Solving."); return
+        }
+        finishRequested = false
+        if let message = cameraProblem { fail(message + " Your saved pages are kept."); return }
+        if let restart { try await restart.value } else if !imported { try await resume(id: id) }
+        guard runID == id else { return }
+        try retake(reason)
         return
       }
       let index = replacing ?? pages.count
+      let replacedEarlierPage = replacing.map { $0 < pages.count - 1 } ?? false
       pages = try draft.add(photo.jpeg, to: pages, replacing: replacing)
       let page = pages[index]
       if let thumbnail = photo.thumbnail { thumbnails[page.id] = UIImage(cgImage: thumbnail) }
@@ -338,12 +366,19 @@ final class AutoScanModel {
       if finishRequested {
         restart?.cancel(); finishRequested = false; phase = .idle; finishScanning(); return
       }
+      if let message = cameraProblem { fail(message + " Your saved pages are kept."); return }
       if imported {
         phase = .idle; restoreIdleTimer()
         guide = "Page \(index + 1) saved. Add another photo, or finish to solve."
+      } else if replacedEarlierPage {
+        // Turning the page now would append the following sheet as a duplicate; wait at the phone instead.
+        restart?.cancel(); camera.stop(); phase = .idle; restoreIdleTimer()
+        guide = "Page \(index + 1) replaced. Tap Continue scanning to add page \(pages.count + 1), or finish to solve."
+        say("Page \(index + 1) replaced.")
       } else {
         try await restart?.value
         guard runID == id else { return }
+        if finishRequested { finishRequested = false; phase = .idle; finishScanning(); return }
         phase = .awaitingNext; progress = 0; awaitingSince = ProcessInfo.processInfo.systemUptime
         if pages.count < Self.maxPages {
           guide = "Page \(index + 1) saved. Turn the page, or give a thumbs-up to finish."; say("Page \(index + 1) saved.")
@@ -351,7 +386,10 @@ final class AutoScanModel {
           guide = "Page limit reached. Give a thumbs-up to finish."; say(guide)
         }
       }
-    } catch { restart?.cancel(); guard runID == id else { return }; fail(error.localizedDescription) }
+    } catch {
+      restart?.cancel(); guard runID == id else { return }
+      fail(cameraProblem.map { $0 + " Your saved pages are kept." } ?? error.localizedDescription)
+    }
   }
   /// Hands-free scanning keeps guiding instead of giving up after unclear stills.
   private func retake(_ reason: String) throws {
@@ -363,7 +401,16 @@ final class AutoScanModel {
   }
   private func resume(id: UUID) async throws {
     do { try await camera.resumePreview() }
-    catch { try Task.checkCancellation(); guard runID == id else { return }; try await camera.start() }
+    catch {
+      try Task.checkCancellation(); guard runID == id else { return }
+      try await camera.start()
+      if runID != id || Task.isCancelled { camera.stop() } // stopped meanwhile: never leave a session open
+    }
+  }
+  private func cancelPreviewRestart() { previewTask?.cancel(); previewTask = nil }
+  private func refreshSolveSetup() {
+    let configuration = configurationProvider()
+    solveSetup = solveWhileScanning && (try? configuration.validate()) != nil ? configuration : nil
   }
 
   // MARK: Solving
@@ -431,6 +478,7 @@ final class AutoScanModel {
     }
     refreshPageStates()
     if phase == .solving { advanceFinish() }
+    else if jobs.isEmpty && phase != .saving { endBackgroundWork() }
   }
 
   private func solveNotice(_ message: String) {
@@ -509,7 +557,7 @@ final class AutoScanModel {
   // MARK: Helpers
 
   private func fail(_ message: String) {
-    runID = UUID(); worker?.cancel(); analysisTask?.cancel(); analysisTask = nil
+    runID = UUID(); worker?.cancel(); analysisTask?.cancel(); analysisTask = nil; cancelPreviewRestart(); cameraProblem = nil
     camera.stop(); voice.stopCommands(); gate.reset(); restoreIdleTimer()
     phase = .failed; guide = message; progress = 0; say("Paused. " + message)
     refreshPageStates()
