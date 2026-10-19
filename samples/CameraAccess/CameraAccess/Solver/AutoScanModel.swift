@@ -113,6 +113,8 @@ final class AutoScanModel {
   @ObservationIgnored private var nextFrameID = 0
   @ObservationIgnored private var lastRead = -Double.infinity
   @ObservationIgnored private var reading = false
+  /// Bumped whenever the open page is saved or dropped, so a text read that finishes late never lands on another page.
+  @ObservationIgnored private var pageGeneration = 0
   @ObservationIgnored private var questions = QuestionProgress()
   @ObservationIgnored private var missingSpoken: Set<Int> = []
   /// Text is read on a steady frame at most this often (accurate recognition takes ~120-250 ms).
@@ -438,9 +440,11 @@ final class AutoScanModel {
     let steady = pageFrames.gate(value)
     if (steady || forced) && !reading && time - lastRead >= Self.readInterval {
       reading = true; lastRead = time
+      let generation = pageGeneration
       let text = (try? await analyzer.readText(image)) ?? FrameText()
+      guard runID == id, generation == pageGeneration else { return }
       reading = false
-      guard runID == id, phase == .seeking else { return }
+      guard phase == .seeking else { return }
       keep(value, image: image, text: text, at: time)
       if forced { forceCapture = false; await commitPage(id: id); return }
     } else if !steady {
@@ -511,7 +515,7 @@ final class AutoScanModel {
   }
 
   private func discardOpenPage() {
-    pageFrames = PageFrames(); keptImages = [:]; reading = false; lastRead = -Double.infinity
+    pageFrames = PageFrames(); keptImages = [:]; reading = false; lastRead = -Double.infinity; pageGeneration += 1
   }
 
   /// "3 photos, questions 1 to 3" for the page being scanned.
