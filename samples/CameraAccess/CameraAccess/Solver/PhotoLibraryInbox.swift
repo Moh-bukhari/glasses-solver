@@ -11,7 +11,7 @@ final class PhotoLibraryInbox: PhotoSource {
   private var observer: LibraryObserver?
   private var onPhoto: (@MainActor (IncomingPhoto) -> Void)?
   private var since = Date.distantFuture
-  /// Library identifiers already handed over, and photos whose data could not be read yet (retried a few times).
+  /// Library identifiers handed over since the last start, and photos whose data could not be read yet (retried a few times).
   private var delivered: Set<String> = []
   private var failures: [String: Int] = [:]
   private var scan: Task<Void, Never>?
@@ -21,6 +21,9 @@ final class PhotoLibraryInbox: PhotoSource {
 
   func start(since: Date, onPhoto: @escaping @MainActor (IncomingPhoto) -> Void) async throws {
     stop()
+    // Every start hands over everything since `since` again: photos a stopped scan never used must come back, and
+    // the scan skips the ones it already used.
+    delivered = []; failures = [:]
     let session = self.session
     let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
     guard self.session == session else { throw CancellationError() }

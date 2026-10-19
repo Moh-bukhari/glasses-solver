@@ -184,6 +184,12 @@ final class AutoScanModel {
   /// Where a continued scan picks up: when the last one stopped, or its oldest photo not yet on a saved page.
   @ObservationIgnored private var photosResumeFrom: Date?
   @ObservationIgnored private var photosReceived = 0
+  /// This scan's start (before the clock allowance) and the newest photo it received: where a stopped scan resumes when
+  /// no photo was waiting, so photos Meta AI imports late are still found.
+  @ObservationIgnored private var photoRunStart: Date?
+  @ObservationIgnored private var lastPhotoTaken: Date?
+  /// The app is in the background (the wearer may be in Meta AI): no idle finish until it is back.
+  @ObservationIgnored private var photosAway = false
   @ObservationIgnored private var photoStart = 0.0
   @ObservationIgnored private var photoHintGiven = false
   /// Checks of the open page so far, and whether the wearer heard that a photo shows the page before again.
@@ -352,6 +358,8 @@ final class AutoScanModel {
     retake(page: target, inView: inView)
     guide = "Retaking page \(target + 1). " + (inView ? "Hold it steady." : "Turn back to it.")
     say(inView ? "Retaking page \(target + 1)." : "Page \(target + 1). Turn back to it.")
+    // The open page's check was cancelled: go on with photos that were waiting for it.
+    if photoScan { pumpPhotos() }
   }
 
   /// Aims the camera at an earlier page. A page that is not in view is photographed only once the view changes,
@@ -418,6 +426,7 @@ final class AutoScanModel {
   /// Leaving the screen stops the camera but never cancels page solving or PDF creation.
   func backgrounded() {
     if !jobs.isEmpty || (photoScan && isCollecting) { beginBackgroundWork() } // let solves and checks in flight finish
+    photosAway = true
     guard isCollecting else { return } // `connecting` may hand off to Meta AI for permission
     // Glasses photos keep arriving in the library (Meta AI may need to be opened to import them); they are picked up
     // as soon as the app is back.
@@ -427,8 +436,10 @@ final class AutoScanModel {
   }
   /// The app is in the foreground again: look for glasses photos imported meanwhile.
   func foregrounded() {
+    photosAway = false
     guard photoScan && isCollecting else { return }
-    photos.catchUp()
+    // Time spent in Meta AI importing photos is not idle time.
+    noteActivity(); photos.catchUp()
     if jobs.isEmpty { endBackgroundWork() }
   }
   func viewDisappeared() {
@@ -962,7 +973,9 @@ final class AutoScanModel {
     photoStatus = "Waiting for the first photo from Meta AI…"
     // Continue where this packet's last scan stopped (at most 10 minutes back), allowing a small clock difference.
     let now = Date()
-    let since = max(min(photosResumeFrom ?? now, now), now.addingTimeInterval(-600)).addingTimeInterval(-ButtonPhotos.lookback)
+    let start = max(min(photosResumeFrom ?? now, now), now.addingTimeInterval(-600))
+    let since = start.addingTimeInterval(-ButtonPhotos.lookback)
+    photoRunStart = start; lastPhotoTaken = nil
     let id = runID
     phase = .connecting; guide = "Opening your photos…"
     worker = Task { [weak self] in
@@ -997,6 +1010,7 @@ final class AutoScanModel {
   private func receivePhoto(_ photo: IncomingPhoto, run: UUID) {
     guard runID == run, photoScan, !usedPhotos.contains(photo.id) else { return }
     usedPhotos.insert(photo.id); photosReceived += 1; noteActivity()
+    lastPhotoTaken = max(lastPhotoTaken ?? photo.taken, photo.taken)
     let delay = max(0, Int(photo.arrived.timeIntervalSince(photo.taken).rounded()))
     photoStatus = "\(photosReceived) photo\(photosReceived == 1 ? "" : "s") received. The last one reached the phone \(delay) s after it was taken."
     intake.append(photo); drainIntake(run: run)
@@ -1009,11 +1023,11 @@ final class AutoScanModel {
     let analyzer = self.analyzer
     intakeTask = Task { [weak self] in
       while let self, self.runID == run, let photo = self.intake.first {
-        self.intake.removeFirst()
         let jpeg = photo.jpeg
         let gesture = await analyzer.photoGesture(jpeg)
         let thumbnail = await Task.detached(priority: .userInitiated) { PageAnalyzer.thumbnail(jpeg, maxPixel: 720) }.value
-        guard self.runID == run else { return }
+        guard self.runID == run else { return } // still in `intake`, so a stopped scan releases it
+        self.intake.removeFirst()
         if let thumbnail { self.preview = thumbnail }
         self.photoEvents.append(gesture.map { .command(Self.command(for: $0)) }
           ?? .photo(PagePhoto(id: photo.id, jpeg: jpeg, taken: photo.taken)))
@@ -1181,7 +1195,11 @@ final class AutoScanModel {
       guard let self, self.runID == run else { return }
       self.discardOpenPage()
       do { try await self.saved(jpegs, thumbnail: thumbnail, restart: nil, id: run, checked: checked) }
-      catch { guard self.runID == run else { return }; self.fail(error.localizedDescription + " Your saved pages are kept.") }
+      catch {
+        guard self.runID == run else { return }
+        self.openPhotos = kept // released by `fail`, so continuing the scan picks them up again
+        self.fail(error.localizedDescription + " Your saved pages are kept.")
+      }
     }
   }
 
@@ -1248,7 +1266,7 @@ final class AutoScanModel {
         }
         + (openPhotos + laterPhotos).map { ($0.id, $0.taken) }
       for photo in pending { usedPhotos.remove(photo.id) }
-      photosResumeFrom = min(pending.map(\.taken).min() ?? Date(), Date())
+      photosResumeFrom = min(pending.map(\.taken).min() ?? lastPhotoTaken ?? photoRunStart ?? Date(), Date())
     }
     watchingPhotos = false
     intakeTask?.cancel(); intakeTask = nil; intake = []; photoEvents = []
@@ -1269,12 +1287,12 @@ final class AutoScanModel {
   /// Says how photos reach the phone if none has arrived soon after Start, and solves after a long pause.
   private func photoTick() {
     let now = ProcessInfo.processInfo.systemUptime
-    if photosReceived == 0, !photoHintGiven, now - photoStart >= Self.photoHintAfter {
+    if photosReceived == 0, !photoHintGiven, !photosAway, now - photoStart >= Self.photoHintAfter {
       photoHintGiven = true
       guide = "No photo has reached the phone yet. In the Meta AI app, turn on Auto-import, or open its gallery to import your photos."
       say("No photos yet. Open Meta AI on your phone to import them.")
     }
-    guard phase == .seeking, !photoBusy, now - lastActivity >= Self.photoIdleFinish else { return }
+    guard phase == .seeking, !photoBusy, !photosAway, now - lastActivity >= Self.photoIdleFinish else { return }
     guard !pages.isEmpty || !openPhotos.isEmpty || !laterPhotos.isEmpty else {
       pauseScanning("Paused after 10 minutes without a photo."); say("Scanning paused."); return
     }
@@ -1560,7 +1578,7 @@ final class AutoScanModel {
     jobs = [:]; results = [:]; jobErrors = [:]; claimed = []; unclear = [:]; leftOut = []; solveSetup = nil; planFinal = false
     packetSolved = false
     pages = []; thumbnails = [:]; pageStates = [:]; solveStatus = ""
-    usedPhotos = []; photosResumeFrom = nil
+    photosResumeFrom = nil // `usedPhotos` stays: a new packet's look-back must not reuse the last packet's photos
     let solver = self.solver
     Task { await solver.forget(keeping: []) }
   }

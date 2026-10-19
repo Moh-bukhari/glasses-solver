@@ -34,8 +34,8 @@ enum PhotoSourceError: LocalizedError, Equatable {
 /// New photos from the glasses, oldest first, while a scan runs.
 @MainActor
 protocol PhotoSource: AnyObject {
-  /// Delivers each photo taken at or after `since` once, oldest first, until `stop()`. Throws when new photos cannot be
-  /// seen (Photos access is missing or limited).
+  /// Delivers each photo taken at or after `since` once per start, oldest first, until `stop()`; the caller skips photos
+  /// it already used. Throws when new photos cannot be seen (Photos access is missing or limited).
   func start(since: Date, onPhoto: @escaping @MainActor (IncomingPhoto) -> Void) async throws
   func stop()
   /// Looks again for photos that arrived while the app was in the background.

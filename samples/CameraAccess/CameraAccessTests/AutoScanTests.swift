@@ -1239,6 +1239,42 @@ final class AutoScanTests: XCTestCase {
     let counts = await checker.photoCounts
     XCTAssertEqual(counts, [1, 1])
   }
+  func testARetakeDuringAPhotoCheckGoesOnWithTheWaitingPhotos() async throws {
+    let checker = FakePageChecker(delay: .milliseconds(400))
+    let (model, photos, _, _) = photoModel(checker)
+    model.start()
+    await waitUntil { model.phase == .seeking }
+    photos.take()
+    await waitUntil { model.pages.count == 1 }
+    let first = try XCTUnwrap(model.pages.first?.id)
+    photos.take() // page 2, being checked
+    await waitUntil { model.guide.hasPrefix("Checking page 2") }
+    photos.take() // waits for that check
+    model.handle(.previous) // retake page 1: page 2's check is dropped, the waiting photo goes on
+    await waitUntil { model.pages.count == 1 && model.pages.first?.id != first }
+    XCTAssertNotEqual(model.pages.first?.id, first, "The waiting photo replaced page 1 instead of stalling.")
+    let references = await checker.references
+    XCTAssertEqual(references.last, true, "The retake is compared with page 1's earlier photo.")
+  }
+  func testANewPacketNeverReusesTheLastPacketsPhotos() async throws {
+    let analyzer = FakePageAnalyzer(sample: goodSample())
+    await analyzer.setPhotoGesture(.thumbsUp, for: "done")
+    let (model, photos, _, _) = photoModel(analyzer: analyzer)
+    model.start()
+    await waitUntil { model.phase == .seeking }
+    photos.take("p1")
+    await waitUntil { model.pages.count == 1 }
+    photos.take("done")
+    await waitUntil { model.phase == .finished }
+    model.start() // a new packet looks back 30 s, so the library shows the last packet's photos again
+    await waitUntil { model.phase == .seeking && photos.starts == 2 }
+    XCTAssertTrue(model.pages.isEmpty)
+    photos.take("p1"); photos.take("done"); photos.take("q1")
+    await waitUntil { model.pages.count == 1 }
+    try await Task.sleep(for: .milliseconds(200))
+    XCTAssertEqual(model.phase, .seeking, "The last packet's thumbs-up photo doesn't finish the new one.")
+    XCTAssertEqual(model.pages.count, 1)
+  }
   func testPhotosNeedFullAccess() async throws {
     let (model, photos, _, _) = photoModel()
     photos.error = PhotoSourceError.limitedAccess
@@ -1446,9 +1482,11 @@ private actor FakePageChecker: PageChecking {
   /// Whether each check got an earlier photo of the page being retaken, and a photo of the page before.
   private(set) var references: [Bool] = []
   private(set) var earlier: [Bool] = []
-  init(_ verdicts: [Result<PageVerdict, any Error>] = []) { self.verdicts = verdicts }
+  private let delay: Duration?
+  init(_ verdicts: [Result<PageVerdict, any Error>] = [], delay: Duration? = nil) { self.verdicts = verdicts; self.delay = delay }
   func check(_ photos: [Data], page: Int, context: PageCheckContext, configuration: SolverConfiguration) async throws -> PageVerdict {
     photoCounts.append(photos.count); references.append(context.reference != nil); earlier.append(context.earlier != nil)
+    if let delay { try await Task.sleep(for: delay) }
     return verdicts.isEmpty ? .clear : try verdicts.removeFirst().get()
   }
 }
