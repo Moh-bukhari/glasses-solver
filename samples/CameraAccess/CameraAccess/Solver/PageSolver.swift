@@ -206,6 +206,7 @@ struct PageCheck: Codable, Sendable, Equatable {
     let clear = verdict.trimmed.lowercased() == "solvable" && !questions.isEmpty
       && questions.allSatisfy { blank($0.unclear) && !$0.read.contains("?") } && blank(unseen) && dropped.count < count
     guard !clear else { return PageVerdict(clear: true, say: "", dropped: dropped) }
+    let unreadable = questions.contains { !blank($0.unclear) || $0.read.contains("?") }
     let words = voice.split(whereSeparator: \.isWhitespace).count
     let say: String
     if !blank(voice) && words <= 16 { say = voice.trimmed }
@@ -213,7 +214,9 @@ struct PageCheck: Codable, Sendable, Equatable {
       say = "Look closer at \(item.label), and hold still."
     } else if !blank(unseen) { say = "Show the rest of the sheet, slowly." }
     else { say = "Look at the whole sheet again, closer and steadier." }
-    return PageVerdict(clear: false, say: say, dropped: dropped, wrongSheet: wrongSheet)
+    // Everything shown so far is readable; the wearer just hasn't shown the whole sheet yet.
+    let notShownYet = !questions.isEmpty && !unreadable && !blank(unseen) && !wrongSheet
+    return PageVerdict(clear: false, say: say, dropped: dropped, wrongSheet: wrongSheet, notShownYet: notShownYet)
   }
 }
 
@@ -225,6 +228,8 @@ struct PageVerdict: Sendable, Equatable {
   let dropped: [Int]
   /// Every photo shows a different sheet than the one to check (a retake of the wrong page).
   var wrongSheet = false
+  /// What the photos show is readable, but part of the sheet has not been shown yet (the wearer may still be scanning).
+  var notShownYet = false
 }
 
 protocol PageChecking: Sendable {

@@ -266,6 +266,8 @@ final class PageSolvingTests: XCTestCase {
     XCTAssertFalse(check([item("2", unclear: "exponent blurred")]).outcome(photos: 1).clear, "A listed problem means not clear.")
     XCTAssertFalse(check([item("2")], unseen: "the bottom of the sheet").outcome(photos: 1).clear)
     XCTAssertEqual(check([item("2")], unseen: "the bottom of the sheet").outcome(photos: 1).say, "Show the rest of the sheet, slowly.")
+    XCTAssertTrue(check([item("2")], unseen: "the bottom of the sheet").outcome(photos: 1).notShownYet, "Readable so far, just not finished.")
+    XCTAssertFalse(check([item("2", unclear: "blurred")], unseen: "the bottom").outcome(photos: 1).notShownYet)
     XCTAssertFalse(check([]).outcome(photos: 1).clear, "A sheet with no questions found is not clear.")
     let spoken = check([item("4(c)", unclear: "blurred")], verdict: "retake", voice: "Look closer at question 4(c), and hold still.")
     XCTAssertEqual(spoken.outcome(photos: 1).say, "Look closer at question 4(c), and hold still.")

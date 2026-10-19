@@ -215,6 +215,8 @@ struct PageFrames: Sendable {
   func words(of ids: Set<Int>) -> Set<String> {
     kept.filter { ids.contains($0.id) }.reduce(into: Set<String>()) { $0.formUnion($1.signature) }
   }
+  /// Restarts the quiet time, e.g. when the page check stops and the page is saved once nothing new appears.
+  mutating func touch(at time: TimeInterval) { if !kept.isEmpty { lastNew = time } }
   /// Drops frames the page check found to show another sheet or nothing readable.
   mutating func remove(_ ids: Set<Int>) { kept.removeAll { ids.contains($0.id) } }
   /// Share of `words` already in `known`: how much of a view was seen before.

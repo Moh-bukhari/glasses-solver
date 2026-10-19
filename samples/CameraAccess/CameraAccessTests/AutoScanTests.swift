@@ -795,6 +795,26 @@ final class AutoScanTests: XCTestCase {
     XCTAssertEqual(references, [false, true, true], "Retake checks include an earlier photo of the page.")
     model.stop()
   }
+  func testAPartlyShownPageIsGuidedWithoutEscalating() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: frameSample()), voice = FakeScanVoice()
+    let notYet = PageVerdict(clear: false, say: "Show the bottom of the sheet.", dropped: [], notShownYet: true)
+    let checker = FakePageChecker([.success(notYet), .success(notYet), .success(notYet)])
+    let model = makeModel(camera, analyzer, FakePageSolver(), FakeSolutionSaver(), capture: .frames, voice: voice, checker: checker)
+    await analyzer.setText(text(viewA))
+    model.start(); await waitUntil { model.phase == .seeking }
+    for (round, view) in [(1, viewA), (2, rest), (3, viewC)] { // three parts, each checked while the bottom is still unseen
+      if round > 1 { await analyzer.setContent(0.3 * Double(round)); await analyzer.setText(text(view)) }
+      try await show(camera, limit: 12) { false }
+    }
+    let checks = await checker.photoCounts
+    XCTAssertEqual(checks.count, 3)
+    XCTAssertEqual(voice.messages.filter { $0.contains("Show the bottom of the sheet.") }, ["Page 1: Show the bottom of the sheet."],
+      "Said once, without asking to keep the page as it is.")
+    await analyzer.setContent(0.95); await analyzer.setText(text(viewB)) // the bottom: the default checker says clear
+    try await show(camera) { model.phase == .awaitingNext }
+    XCTAssertEqual(model.pages.count, 1); model.stop()
+  }
   func testAfterThreeUnclearChecksThePageWaitsForTheWearer() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
     let analyzer = FakePageAnalyzer(sample: frameSample()), voice = FakeScanVoice()

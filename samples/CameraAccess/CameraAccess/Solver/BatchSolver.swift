@@ -291,8 +291,9 @@ struct SolverClient: AITransport {
   blurry: numbers of photos that add nothing because they are too blurred, dark, distant or covered to read any text
   that another photo does not show more clearly. Usually empty.
   otherSheet: numbers of photos that show a different sheet. When a REFERENCE photo is given, the sheet you check is the
-  REFERENCE sheet. Otherwise it is the one most photos show; on a tie, the one in photo 1. Compare question numbers,
-  wording and layout, not the look of the paper. Ignore blurry and otherSheet photos from here on.
+  REFERENCE sheet; otherwise it is the sheet in photo 1, even if later photos show another sheet (the wearer may have
+  turned the page too early). Compare question numbers, wording and layout, not the look of the paper. Ignore blurry
+  and otherSheet photos from here on.
   questions: in printed order, every question and lettered or numbered subpart on the sheet, and every figure, graph or
   table they use.
     label: as printed, e.g. "3(b)", "Q4", "Figure 2"; for an unlabeled item, a few words such as "top problem".

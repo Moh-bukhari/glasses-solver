@@ -144,7 +144,7 @@ final class AutoScanModel {
   /// Why checks stopped for this scan (a key, billing or model problem); pages are then saved without a check.
   @ObservationIgnored private var checksOff: String?
   @ObservationIgnored private var checkKey = false
-  static let checkQuiet: TimeInterval = 1.2
+  static let checkQuiet: TimeInterval = 1.5
   /// From this many unclear answers on, the wearer hears that 👉 keeps the page; checks continue only after new views.
   static let maxCheckRounds = 3
   /// An unclear page with nothing new for this long gets one spoken reminder of what to show, and that 👉 keeps it.
@@ -492,7 +492,7 @@ final class AutoScanModel {
     if checksActive {
       let changed = lastChange > checkedThrough || time >= retryCheckAt
       if pageCheck == nil, !pageFrames.isEmpty, changed, time - lastChange >= Self.checkQuiet { startCheck(id: id); return }
-      if pageCheck == nil, checkRounds > 0, !changed, !reminded, time - verdictAt >= Self.remindAfter {
+      if pageCheck == nil, !lastRetake.isEmpty, !changed, !reminded, time - verdictAt >= Self.remindAfter {
         // Never wait in silence: repeat what the page needs, and the way to keep it as it is.
         reminded = true; say("Page \(openNumber): \(lastRetake) Or thumbs-right to keep it as it is.")
       }
@@ -523,7 +523,7 @@ final class AutoScanModel {
       return
     }
     let frameID = nextFrameID; nextFrameID += 1
-    pageFrames.keepCloserViews = checksActive && checkRounds > 0; pageFrames.evictWhenFull = checksActive
+    pageFrames.keepCloserViews = checksActive && !lastRetake.isEmpty; pageFrames.evictWhenFull = checksActive
     switch pageFrames.offer(value, text: text, id: frameID, at: time) {
     case .added(let new):
       keptImages[new] = (image, value)
@@ -570,7 +570,7 @@ final class AutoScanModel {
     // A retake is checked against an earlier photo of that page, so another sheet in view is not saved in its place.
     let reference = replacing.flatMap { pages.indices.contains($0) ? pages[$0].frames.first : nil }
     guide = "Checking page \(number)…"; progress = 0
-    if checkRounds == 0 && checkFailures == 0 { say("Checking page \(number).") }
+    if lastRetake.isEmpty && checkFailures == 0 { say("Checking page \(number).") }
     let images = frames.map(\.image)
     pageCheck = Task { [weak self] in
       let outcome: Result<(PageVerdict, [Data]), any Error>
@@ -614,9 +614,17 @@ final class AutoScanModel {
         let ids = Set(dropped.map { frames[$0].id })
         pageFrames.remove(ids); for frame in ids { keptImages[frame] = nil }
       }
-      checkRounds += 1
       let advice = verdict.clear ? "Look at page \(number) again, closer." : verdict.say
       let message: String
+      if verdict.notShownYet && !finishRequested {
+        // The wearer is probably still scanning the page: guide, but don't escalate or repeat the same request aloud.
+        let repeated = advice == lastRetake
+        lastRetake = advice; verdictAt = ProcessInfo.processInfo.systemUptime; reminded = false
+        guide = "Page \(number): \(advice)"; progress = 0
+        if !repeated { say(guide) }
+        return
+      }
+      checkRounds += 1
       if finishRequested {
         finishRequested = false; finishAnyway = true
         message = "Page \(number): \(advice) Or thumbs-up to solve anyway."
@@ -634,10 +642,13 @@ final class AutoScanModel {
       if error is CancellationError { return }
       // Only the frames this check covered are saved; frames kept meanwhile may already show the next sheet.
       if Self.stopsChecks(error) {
-        // A key, billing or model problem would fail every page: save pages without a check from now on.
+        // A key, billing or model problem would fail every page: from now on pages are saved once nothing new appears,
+        // starting with this one, which the wearer may still be scanning.
         checksOff = error.localizedDescription
         say("Page checks are off. \(error.localizedDescription) Pages are saved without a check.")
-        await commitPage(id: id, frames: frames); return
+        pageFrames.touch(at: ProcessInfo.processInfo.systemUptime)
+        if finishRequested { await commitPage(id: id, frames: frames) }
+        return
       }
       checkFailures += 1
       if checkFailures >= 2 {
@@ -880,7 +891,7 @@ final class AutoScanModel {
       // checked first, unless the wearer already heard it is unclear and gives 👍 again to solve anyway.
       let run = runID
       if checksActive && !finishAnyway {
-        if pageCheck == nil && lastChange <= verdictThrough && checkRounds > 0 {
+        if pageCheck == nil && lastChange <= verdictThrough && !lastRetake.isEmpty {
           finishAnyway = true
           let message = "Page \(openNumber) still isn't clear: \(lastRetake) Or thumbs-up to solve anyway."
           guide = message; say(message); return
