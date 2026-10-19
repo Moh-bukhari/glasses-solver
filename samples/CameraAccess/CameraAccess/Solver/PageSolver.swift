@@ -20,10 +20,15 @@ struct PageJob: Sendable {
   let nextFrames: [URL]
   /// Items this page skipped as belonging to the previous page, which that page did not solve.
   var mustSolve: [String] = []
-  init(key: PageJobKey, number: Int, primaryFrames: [URL], previousFrames: [URL], nextFrames: [URL], mustSolve: [String] = []) {
+  /// What the wearer calls the page, e.g. "Question 3" (read on the phone); "Page N" when unknown.
+  var name: String?
+  init(key: PageJobKey, number: Int, primaryFrames: [URL], previousFrames: [URL], nextFrames: [URL], mustSolve: [String] = [],
+       name: String? = nil) {
     self.key = key; self.number = number; self.primaryFrames = primaryFrames
-    self.previousFrames = previousFrames; self.nextFrames = nextFrames; self.mustSolve = mustSolve
+    self.previousFrames = previousFrames; self.nextFrames = nextFrames; self.mustSolve = mustSolve; self.name = name
   }
+  /// Used in every message about this page.
+  var title: String { name ?? "Page \(number)" }
   init(key: PageJobKey, number: Int, primary: URL, previous: URL?, next: URL?, mustSolve: [String] = []) {
     self.init(key: key, number: number, primaryFrames: [primary], previousFrames: previous.map { [$0] } ?? [],
       nextFrames: next.map { [$0] } ?? [], mustSolve: mustSolve)
@@ -126,9 +131,9 @@ struct PageResult: Codable, Sendable {
   }
 
   /// `mustCover` holds labels an earlier draft solved (cross-check); `mustSolve` labels must be solved here.
-  func validate(page: Int, mustCover: Set<String> = [], mustSolve: [String] = []) throws {
+  func validate(page: Int, name: String? = nil, mustCover: Set<String> = [], mustSolve: [String] = []) throws {
     guard readable else {
-      throw AIResultError.unreadable("Page \(page): \(retake.trimmed.isEmpty ? "show all writing clearly in a closer photo." : retake.trimmed)")
+      throw AIResultError.unreadable("\(name ?? "Page \(page)"): \(retake.trimmed.isEmpty ? "show all writing clearly in a closer photo." : retake.trimmed)")
     }
     let labels = solutions.map { Self.normalized($0.label) }
     guard Set(labels).count == labels.count, !labels.contains("") else {
@@ -207,36 +212,36 @@ actor PageSolver: PageSolving {
     let photos = try photos(for: job), task = Self.task(for: job), lead = configuration.lead
     let mustSolve = job.mustSolve
     guard let peer = configuration.peer else {
-      return try await decoded(lead, photos: photos, prompt: task, page: job.number, mustSolve: mustSolve, progress: progress)
+      return try await decoded(lead, photos: photos, prompt: task, page: job.number, name: job.title, mustSolve: mustSolve, progress: progress)
     }
-    async let first = decoded(lead, photos: photos, prompt: task, page: job.number, mustSolve: mustSolve, progress: progress)
-    async let second = decoded(peer, photos: photos, prompt: task, page: job.number, mustSolve: mustSolve, progress: progress)
+    async let first = decoded(lead, photos: photos, prompt: task, page: job.number, name: job.title, mustSolve: mustSolve, progress: progress)
+    async let second = decoded(peer, photos: photos, prompt: task, page: job.number, name: job.title, mustSolve: mustSolve, progress: progress)
     let (a, b) = try await (first, second)
     let required = Set((a.solutions + b.solutions).map(\.label))
     return try await decoded(lead, photos: photos, prompt: task + Self.reconcile(a, b, lead: lead.provider, peer: peer.provider),
-      page: job.number, mustCover: required, mustSolve: mustSolve, progress: progress)
+      page: job.number, name: job.title, mustCover: required, mustSolve: mustSolve, progress: progress)
   }
 
   /// One repair for malformed, truncated or self-inconsistent output. Never for refusals or unreadable pages.
-  private func decoded(_ credential: AICredential, photos: [AIPhoto], prompt: String, page: Int, mustCover: Set<String> = [],
+  private func decoded(_ credential: AICredential, photos: [AIPhoto], prompt: String, page: Int, name: String, mustCover: Set<String> = [],
                        mustSolve: [String] = [], progress: @escaping @Sendable (String) -> Void) async throws -> PageResult {
     var correction = ""
     for attempt in 0..<2 {
       try Task.checkCancellation()
       do {
         let data = try await send(AIRequest(credential: credential, photos: photos, prompt: prompt + correction,
-          tokenLimit: SolverClient.outputLimit(attempt == 0 ? 32_000 : 48_000, model: credential.model)), page: page, progress: progress)
+          tokenLimit: SolverClient.outputLimit(attempt == 0 ? 32_000 : 48_000, model: credential.model)), name: name, progress: progress)
         try Task.checkCancellation()
         let result: PageResult
         do { result = try JSONDecoder().decode(PageResult.self, from: data) }
         catch { throw AIResultError.repairable("The response did not contain the required complete JSON result.") }
-        try result.validate(page: page, mustCover: mustCover, mustSolve: mustSolve)
+        try result.validate(page: page, name: name, mustCover: mustCover, mustSolve: mustSolve)
         return result
       } catch AIResultError.repairable(let reason) {
         guard attempt == 0 else {
-          throw SolverError.message("Page \(page): \(credential.provider.name) still returned an incomplete result. \(reason) Your pages are saved; solve again to retry this page.")
+          throw SolverError.message("\(name): \(credential.provider.name) still returned an incomplete result. \(reason) Your pages are saved; solve again to retry it.")
         }
-        progress("Page \(page): \(credential.provider.name) is completing an unfinished answer.")
+        progress("\(name): \(credential.provider.name) is completing an unfinished answer.")
         correction = "\nREPAIR REQUIRED: \(reason) Return the COMPLETE JSON for this page, keep worked steps concise, and fill every field. Do not guess unreadable text."
       }
     }
@@ -244,7 +249,7 @@ actor PageSolver: PageSolving {
   }
 
   /// Bounded retries for overloads, rate limits and dropped connections only.
-  private func send(_ request: AIRequest, page: Int, progress: @escaping @Sendable (String) -> Void) async throws -> Data {
+  private func send(_ request: AIRequest, name: String, progress: @escaping @Sendable (String) -> Void) async throws -> Data {
     var retries = 0
     while true {
       try Task.checkCancellation()
@@ -258,7 +263,7 @@ actor PageSolver: PageSolving {
         guard retries < retryDelays.count, !Task.isCancelled, Self.isTransient(error) else { throw error }
         let delay = (error as? AIServiceError)?.retryAfter.map { Duration.seconds(min(max($0, 1), 20)) } ?? retryDelays[retries]
         retries += 1
-        progress("Page \(page): \(request.credential.provider.name) is busy. Retrying (\(retries) of \(retryDelays.count))…")
+        progress("\(name): \(request.credential.provider.name) is busy. Retrying (\(retries) of \(retryDelays.count))…")
         try await Task.sleep(for: delay)
       }
     }
@@ -302,7 +307,8 @@ actor PageSolver: PageSolving {
     checklist: the full label of every answerable item whose label is visible on the PRIMARY page, in order; when a question has subparts, list the subparts, not the parent number.
     solutions: completely solve every checklist item this page owns, using the other pages for shared context. sourcePages lists every source page number the solution uses.
     skipped: list an item, with the reason, only if its OWN label already appears on the PREVIOUS page (its continuation, or a repeated/overlapping photo). Never skip for any other reason, and never skip a subpart just because its parent question began earlier.
-    readable: false only if essential content of an item this page owns cannot be read; then retake says exactly what to recapture. Otherwise retake is an empty string.
+    readable: false only if essential content of an item this page owns cannot be read in ANY of the PRIMARY photos (several photos may show the same part, some blurred: read each item from its clearest photo). Then retake names the question and says exactly what to recapture. Otherwise retake is an empty string.
+    Copy every given number, sign and unit exactly from the clearest photo. If a value reads differently in different photos and the clearest one is still ambiguous, use status needs_review and give both readings in reviewNote.
     title: a short title for the topic of the packet. reviewNote: empty when solved; otherwise exactly what is unresolved. For unresolved items, steps, answer and check state what can and cannot be determined.
     """
     if !job.mustSolve.isEmpty {

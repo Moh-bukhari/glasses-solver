@@ -118,10 +118,15 @@ final class AutoScanModel {
   /// Words of the page saved last: a view of the same sheet must not start the next page (it would duplicate questions).
   @ObservationIgnored private var savedPageWords: Set<String> = []
   @ObservationIgnored private var stillSpoken = false
+  /// The packet labels its questions with words ("Question 3"); bare "3." lines are then lists inside a question.
+  @ObservationIgnored private var usesHeadings = false
+  @ObservationIgnored private var wrongQuestionSpoken = false
   @ObservationIgnored private var questions = QuestionProgress()
   @ObservationIgnored private var missingSpoken: Set<Int> = []
   /// Text is read on a steady frame at most this often (accurate recognition takes ~120-250 ms).
   static let readInterval: TimeInterval = 0.33
+  /// Photos kept for one question when it is scanned again later.
+  static let maxFramesPerPage = 8
 
   init(camera: any ScanCamera, analyzer: any PageAnalyzing = PageAnalyzer(),
        solver: any PageSolving = PageSolver(), saver: any SolutionSaving = SolutionStore(),
@@ -187,13 +192,13 @@ final class AutoScanModel {
         guard runID == id else { return }
         phase = .seeking; noteActivity()
         if let index {
-          guide = "Show page \(index + 1) again, close and steady."; say("Show page \(index + 1) again.")
+          guide = "Show \(pageName(index).lowercased()) again, close and steady."; say("Show \(pageName(index).lowercased()) again.")
         } else if keyMissing {
           guide = "No API key yet. Pages will be saved; add a key in Settings before you finish."
           say("Ready. No API key yet, so pages are only saved. Add a key in Settings before you finish.")
         } else {
-          guide = "Look at page \(pages.count + 1), close and steady. Thumbs-up when you're done."
-          say(pages.isEmpty ? "Ready. Look at the first page. Give a thumbs-up when you're done." : "Ready for page \(pages.count + 1).")
+          guide = "Look closely at the next question. Thumbs-up when you're done."
+          say(pages.isEmpty ? "Ready. Look at the first question, close up. Give a thumbs-up when you're done." : "Ready. Next question.")
         }
       } catch { guard runID == id else { return }; fail(error.localizedDescription) }
     }
@@ -217,7 +222,7 @@ final class AutoScanModel {
     if !fromTurn { savedPageWords = [] } // 👉: the wearer says this is a new page, even if it looks alike
     // Adding pages after Finish (from a hands-free retry): the newest page waits for its successor again.
     if planFinal { planFinal = false; syncJobs() }
-    guide = "Page \(pages.count + 1): hold it close and steady."; say("Page \(pages.count + 1).")
+    guide = "Next page: hold it close and steady."; if !fromTurn || helpGiven.insert("next").inserted { say("Next.") }
   }
 
   /// One command path for hand gestures, the screen, and optional glasses clicks or voice.
@@ -263,8 +268,9 @@ final class AutoScanModel {
     }
     guard target >= 0 else { guide = "This is page 1. Show it again."; say("This is page 1."); return }
     retake(page: target, inView: inView)
-    guide = "Retaking page \(target + 1). " + (inView ? "Hold it steady." : "Turn back to page \(target + 1).")
-    say(inView ? "Retaking page \(target + 1)." : "Page \(target + 1). Turn back to it.")
+    let name = pageName(target)
+    guide = "Retaking \(name.lowercased()). " + (inView ? "Hold it steady." : "Turn back to it.")
+    say(inView ? "Retaking \(name.lowercased())." : "\(name). Turn back to it.")
   }
 
   /// Aims the camera at an earlier page. A page that is not in view is photographed only once the view changes,
@@ -412,7 +418,7 @@ final class AutoScanModel {
           if armGate.observe(value, at: time) || time >= armDeadline {
             armAfterTurn = false; gate.reset()
           } else {
-            gate.reset(); progress = 0; guide = "Turn to page \(index + 1)…"; return
+            gate.reset(); progress = 0; guide = "Turn to \(pageName(index).lowercased())…"; return
           }
         }
         if captureMode == .frames && !imported { await collect(value, image: image, at: time, id: id); return }
@@ -457,15 +463,42 @@ final class AutoScanModel {
     if pageFrames.isComplete(at: time) { await commitPage(id: id); return }
     if !pageFrames.isEmpty && !cued {
       progress = min(0.99, (time - pageFrames.lastNew) / pageFrames.configuration.quietTime)
-      guide = "Page \((replacing ?? pages.count) + 1): \(pageSummary())"
+      guide = "\(openPageName): \(pageSummary())"
     }
   }
 
   private func keep(_ value: PageSample, image: CGImage, text: FrameText, at time: TimeInterval) {
-    if pageFrames.isEmpty, replacing == nil,
+    // The printed question must be readable; large handwriting alone does not make a frame worth keeping.
+    guard pageFrames.isLegible(text) else {
+      guide = "Move a little closer: the printed text is too small to read."; speakCue(.closer, at: time); return
+    }
+    if !text.headings.isEmpty, !usesHeadings { usesHeadings = true; pageFrames.headingsOnly = true }
+    let numbers = Set(usesHeadings ? text.headings : text.labels)
+    if let target = replacing, pages.indices.contains(target), !pages[target].questions.isEmpty, !numbers.isEmpty,
+      numbers.isDisjoint(with: pages[target].questions) {
+      // A retake must show the question being retaken.
+      if !wrongQuestionSpoken {
+        wrongQuestionSpoken = true
+        say("That's \(QuestionLabels.spoken(Array(numbers)).lowercased()). Show \(pageName(target).lowercased()).")
+      }
+      return
+    }
+    let open = pageFrames.questions(headingsOnly: usesHeadings)
+    if replacing == nil, !pageFrames.isEmpty, !open.isEmpty, !numbers.isEmpty, numbers.isDisjoint(with: open) {
+      // Another question in view: the one being scanned is done. Save it and keep scanning the new one.
+      let run = runID
+      Task { [weak self] in await self?.commitPage(id: run, nextQuestion: true) }
+      return
+    }
+    let savedQuestions = Set(lastSaved.flatMap { pages.indices.contains($0) ? pages[$0].questions : nil } ?? [])
+    if pageFrames.isEmpty, replacing == nil, numbers.isSubset(of: savedQuestions),
       PageFrames.overlap(text.signature, with: savedPageWords) >= pageFrames.configuration.sameView {
       // The sheet just saved is still in view (seen whole, or a part already kept): not the next page.
-      if !stillSpoken { stillSpoken = true; say("Still page \(pages.count). Turn the page, or thumbs-left to retake it.") }
+      // A question number it did not have is the next question, even on the same sheet.
+      if !stillSpoken {
+        stillSpoken = true
+        say("Still \(pageName(lastSaved ?? pages.count - 1).lowercased()). Turn the page, or thumbs-left to retake it.")
+      }
       return
     }
     let frameID = nextFrameID; nextFrameID += 1
@@ -483,8 +516,8 @@ final class AutoScanModel {
       Task { [weak self] in await self?.commitPage(id: run) }
       return
     }
-    noteActivity(); stillSpoken = false
-    let found = questions.observe(text.labels)
+    noteActivity(); stillSpoken = false; wrongQuestionSpoken = false
+    let found = questions.observe(usesHeadings ? text.headings : text.labels)
     if !found.new.isEmpty { say(QuestionLabels.spoken(found.new) + ".") }
     let missing = (found.missing + pageFrames.missing).filter { missingSpoken.insert($0).inserted }
     if !missing.isEmpty {
@@ -502,16 +535,24 @@ final class AutoScanModel {
   }
 
   /// Saves the kept frames as one page (in the order they were first taken) and continues like a saved still.
-  private func commitPage(id: UUID) async {
+  /// Frames of a question saved earlier are added to that page instead of making a second copy of the question.
+  /// `nextQuestion`: the next question is already in view, so scanning continues without waiting for a page turn.
+  private func commitPage(id: UUID, nextQuestion: Bool = false) async {
     let ids = pageFrames.frameIDs
     guard runID == id, phase == .seeking, !ids.isEmpty else { return }
     let kept = ids.compactMap { keptImages[$0] }
+    var numbers = pageFrames.questions(headingsOnly: usesHeadings)
+    let merge = replacing == nil && !numbers.isEmpty
+      ? pages.firstIndex { !Set($0.questions).isDisjoint(with: numbers) } : nil
+    if let merge { numbers.formUnion(pages[merge].questions) }
+    let earlier = merge.map { pages[$0].frames } ?? []
     let summary = pageSummary()
-    phase = .checking; progress = 0; guide = "Saving page \((replacing ?? pages.count) + 1): \(summary)…"
-    let images = kept.map(\.image)
+    phase = .checking; progress = 0; guide = "Saving \(openPageName.lowercased()): \(summary)…"
+    let images = kept.map(\.image), limit = Self.maxFramesPerPage
     do {
       let (jpegs, thumbnail) = try await Task.detached(priority: .userInitiated) {
-        let jpegs = try images.map { try PageAnalyzer.encodeJPEG($0, quality: 0.9) }
+        let fresh = try images.map { try PageAnalyzer.encodeJPEG($0, quality: 0.9) }
+        let jpegs = Array((try earlier.map { try Data(contentsOf: $0) } + fresh).suffix(limit))
         return (jpegs, PageAnalyzer.thumbnail(jpegs[0])) // a small preview, not a full frame kept per page
       }.value
       guard runID == id else { return }
@@ -520,7 +561,9 @@ final class AutoScanModel {
       let words = pageFrames.words
       discardOpenPage()
       savedPageWords = words; stillSpoken = false
-      try await saved(jpegs, thumbnail: thumbnail, restart: nil, id: id, summary: summary)
+      if let merge { replacing = merge }
+      try await saved(jpegs, thumbnail: thumbnail, restart: nil, id: id, summary: merge == nil ? summary : "\(jpegs.count) photos",
+        questions: numbers.sorted(), merged: merge != nil, nextQuestion: nextQuestion)
     } catch {
       guard runID == id else { return }
       fail(error.localizedDescription + " Your saved pages are kept.")
@@ -528,13 +571,24 @@ final class AutoScanModel {
   }
 
   private func discardOpenPage() {
-    pageFrames = PageFrames(); keptImages = [:]; reading = false; lastRead = -Double.infinity; pageGeneration += 1
+    pageFrames = PageFrames(); pageFrames.headingsOnly = usesHeadings
+    keptImages = [:]; reading = false; lastRead = -Double.infinity; pageGeneration += 1; wrongQuestionSpoken = false
   }
 
-  /// "3 photos, questions 1 to 3" for the page being scanned.
+  /// What the wearer calls a saved page: "Question 3", or "Page 4" when no question number was read.
+  private func pageName(_ index: Int) -> String {
+    pages.indices.contains(index) ? pages[index].name(at: index) : "Page \(index + 1)"
+  }
+  /// The page being scanned: its question numbers once read, else the saved page it replaces, else its position.
+  private var openPageName: String {
+    let questions = pageFrames.questions(headingsOnly: usesHeadings)
+    if !questions.isEmpty { return QuestionLabels.spoken(Array(questions)) }
+    return pageName(replacing ?? pages.count)
+  }
+  /// "3 photos" for the page being scanned (its name already says which questions).
   private func pageSummary() -> String {
-    let count = pageFrames.kept.count, labels = pageFrames.labels.sorted()
-    return "\(count) photo\(count == 1 ? "" : "s")" + (labels.isEmpty ? "" : ", " + QuestionLabels.spoken(labels).lowercased())
+    let count = pageFrames.kept.count
+    return "\(count) photo\(count == 1 ? "" : "s")"
   }
 
   private func handle(gesture: HandGesture) {
@@ -547,7 +601,7 @@ final class AutoScanModel {
 
   private func beginCapture(_ value: PageSample, at time: TimeInterval, id: UUID) {
     forceCapture = false
-    phase = .capturing; guide = "Taking page \((replacing ?? pages.count) + 1). Keep still…"; progress = 0
+    phase = .capturing; guide = "Taking \(pageName(replacing ?? pages.count).lowercased()). Keep still…"; progress = 0
     say("Hold still.")
     turnGate.saved(value, at: time)
     worker = Task { [weak self] in
@@ -574,7 +628,7 @@ final class AutoScanModel {
     if finishRequested, !pages.isEmpty { finishRequested = false; phase = .idle; finishScanning(); return }
     captureFailures += 1
     guard captureFailures < 3, !(error is CancellationError) else { fail(error.localizedDescription); return }
-    guide = "The photo didn't come through. Show page \((replacing ?? pages.count) + 1) again."; say(guide)
+    guide = "The photo didn't come through. Show \(pageName(replacing ?? pages.count).lowercased()) again."; say(guide)
     do {
       try await resume(id: id); guard runID == id else { return }
       gate.reset(); progress = 0; phase = .seeking
@@ -619,11 +673,15 @@ final class AutoScanModel {
 
   /// Saves the page (a still or a set of frames) and moves on: the next page, the next unclear page, or solving.
   /// `restart` is the preview restart running after a still; frames never stop the preview.
+  /// `merged`: more photos of a question saved earlier (the wearer came back to it); the scan simply continues.
   private func saved(_ jpegs: [Data], thumbnail: CGImage?, restart: Task<Void, any Error>?, id: UUID,
-                     summary: String? = nil) async throws {
+                     summary: String? = nil, questions: [Int] = [], merged: Bool = false,
+                     nextQuestion: Bool = false) async throws {
     let index = replacing ?? pages.count
-    let replacedEarlierPage = replacing.map { $0 < pages.count - 1 } ?? false
-    pages = try draft.add(frames: jpegs, to: pages, replacing: replacing)
+    let replacedEarlierPage = !merged && (replacing.map { $0 < pages.count - 1 } ?? false)
+    // A retake keeps the page's question numbers unless new ones were read.
+    let numbers = questions.isEmpty ? (replacing.flatMap { pages.indices.contains($0) ? pages[$0].questions : nil } ?? []) : questions
+    pages = try draft.add(frames: jpegs, questions: numbers, to: pages, replacing: replacing)
     packetSolved = false
     let page = pages[index]
     if let thumbnail { thumbnails[page.id] = UIImage(cgImage: thumbnail) }
@@ -639,16 +697,16 @@ final class AutoScanModel {
     if let message = cameraProblem { fail(message + " Your saved pages are kept."); return }
     if imported {
       phase = .idle; restoreIdleTimer()
-      guide = "Page \(index + 1) saved. Add another photo, or finish to solve."
+      guide = "\(pageName(index)) saved. Add another photo, or finish to solve."
     } else if fixing {
       // Asked for after Finish: continue with the next unclear page, or go straight back to solving.
       if let next = nextFixTarget() {
         try await restart?.value
         guard runID == id else { return }
-        askAgain(for: next, after: "Page \(index + 1) saved.")
+        askAgain(for: next, after: "\(pageName(index)) saved.")
       } else {
         restart?.cancel(); fixing = false; phase = .idle
-        say("Page \(index + 1) saved."); finishScanning()
+        say("\(pageName(index)) saved."); finishScanning()
       }
     } else if replacedEarlierPage {
       // The sheets in front of the wearer were already scanned, so a page turn must not add them again.
@@ -657,18 +715,23 @@ final class AutoScanModel {
       guard runID == id else { return }
       phase = .awaitingNext; holdForNext = true; progress = 0
       if pages.count < Self.maxPages {
-        guide = "Page \(index + 1) replaced. Turn to page \(pages.count + 1), then give a thumbs-right. Thumbs-up solves."
-        say("Page \(index + 1) replaced. At page \(pages.count + 1), thumbs-right. Or thumbs-up to solve.")
+        guide = "\(pageName(index)) replaced. Turn to the next new question, then give a thumbs-right. Thumbs-up solves."
+        say("\(pageName(index)) replaced. At the next new question, thumbs-right. Or thumbs-up to solve.")
       } else {
-        guide = "Page \(index + 1) replaced. Give a thumbs-up to solve."; say(guide)
+        guide = "\(pageName(index)) replaced. Give a thumbs-up to solve."; say(guide)
       }
     } else {
       try await restart?.value
       guard runID == id else { return }
       if finishRequested { finishRequested = false; phase = .idle; finishScanning(); return }
       phase = .awaitingNext; progress = 0; awaitingSince = ProcessInfo.processInfo.systemUptime; nextHintGiven = false
+      if nextQuestion, pages.count < Self.maxPages {
+        // The wearer already moved on to the next question: keep scanning it.
+        say("\(pageName(index)) \(merged ? "updated" : "saved").")
+        nextPage(fromTurn: true); return
+      }
       if pages.count < Self.maxPages {
-        let saved = "Page \(index + 1) saved" + (summary.map { ": \($0)" } ?? "") + "."
+        let saved = "\(pageName(index)) \(merged ? "updated" : "saved")" + (summary.map { ": \($0)" } ?? "") + "."
         guide = saved + " Turn the page. Thumbs-left retakes it; thumbs-up finishes."
         say(helpGiven.insert("saved").inserted ? saved + " Turn the page. Thumbs-left retakes it, thumbs-up finishes." : saved)
       } else {
@@ -680,8 +743,8 @@ final class AutoScanModel {
   private func retakeUnclearStill(_ reason: String) throws {
     guard !imported else { throw SolverError.message(reason + " Choose a clearer photo.") }
     let number = (replacing ?? pages.count) + 1
-    guide = "That photo wasn't clear. Show page \(number) again. \(reason)"
-    say("Show page \(number) again. \(reason)")
+    guide = "That photo wasn't clear. Show \(pageName(number - 1).lowercased()) again. \(reason)"
+    say("Show \(pageName(number - 1).lowercased()) again. \(reason)")
     gate.reset(); progress = 0; phase = .seeking
   }
   private func resume(id: UUID) async throws {
@@ -757,7 +820,8 @@ final class AutoScanModel {
     // Neighbors are context: their photos nearest this page (frames are in capture order) keep requests small.
     let job = PageJob(key: key, number: index + 1, primaryFrames: pages[index].frames,
       previousFrames: Array((key.previous.flatMap { frames[$0] } ?? []).suffix(2)),
-      nextFrames: Array((key.next.flatMap { frames[$0] } ?? []).prefix(2)), mustSolve: mustSolve)
+      nextFrames: Array((key.next.flatMap { frames[$0] } ?? []).prefix(2)), mustSolve: mustSolve,
+      name: pages[index].questions.isEmpty ? nil : pages[index].name(at: index))
     let token = UUID(), solver = self.solver
     let notify: @Sendable (String) -> Void = { [weak self] message in
       Task { @MainActor in self?.solveNotice(message) }
@@ -832,9 +896,9 @@ final class AutoScanModel {
       guide = "Solving… \(done) of \(solving.count) pages done."; return
     }
     guard failed.isEmpty else {
-      let numbers = failed.compactMap { key in pages.firstIndex { $0.id == key.page }.map { String($0 + 1) } }
+      let names = failed.compactMap { key in pages.firstIndex { $0.id == key.page }.map(pageName) }
       let detail = jobErrors[failed[0]] ?? ""
-      let summary = failed.count == 1 ? detail : "Pages \(numbers.joined(separator: ", ")) could not be solved. \(detail)"
+      let summary = failed.count == 1 ? detail : "\(names.joined(separator: ", ")) could not be solved. \(detail)"
       endBackgroundWork()
       if handsFree {
         standby(summary + " Solved pages are kept. Give a thumbs-up to try again.",
@@ -862,14 +926,14 @@ final class AutoScanModel {
       guard !claimed.contains(key) else { continue }
       claimed.insert(key); results[key] = nil
       startJob(key, configuration, mustSolve: labels)
-      guide = "Completing \(labels.joined(separator: ", ")) on page \(number)…"
+      guide = "Completing \(labels.joined(separator: ", ")) on \(pageName(number - 1).lowercased())…"
       refreshPageStates(); return
     }
     // A page the wearer chose to leave out stays visible in the PDF, with its photo, as an item to review.
     for (index, page) in pages.enumerated() where leftOut.contains(page.id) {
       let reason = unclear[page.id] ?? "The photo could not be read."
-      let note = PageSolutionItem(label: "Page \(index + 1)", problem: "This page could not be read, so it was left out.",
-        steps: ["Retake page \(index + 1) and finish again to add its solutions."], answer: "—", check: "—",
+      let note = PageSolutionItem(label: pageName(index), problem: "This page could not be read, so it was left out.",
+        steps: ["Retake \(pageName(index).lowercased()) and finish again to add its solutions."], answer: "—", check: "—",
         status: "unreadable", reviewNote: reason, sourcePages: [index + 1])
       entries.append((index + 1, PageResult(readable: true, retake: "", title: "", checklist: [], solutions: [note], skipped: [])))
     }
@@ -886,7 +950,7 @@ final class AutoScanModel {
     fixing = true
     begin(imported: false)
     let id = runID
-    phase = .connecting; guide = unclear[pages[index].id] ?? "Page \(index + 1) is unclear."
+    phase = .connecting; guide = unclear[pages[index].id] ?? "\(pageName(index)) is unclear."
     say(fixRequest(for: index)) // while the camera reconnects, so the wearer can already turn to that page
     worker = Task { [weak self] in
       guard let self else { return }
@@ -897,19 +961,19 @@ final class AutoScanModel {
       } catch {
         guard runID == id else { return }
         fixing = false
-        fail(error.localizedDescription + " Retake page \(index + 1) with the Retake button under it, then tap Done.")
+        fail(error.localizedDescription + " Retake \(pageName(index).lowercased()) with the Retake button under it, then tap Done.")
       }
     }
   }
 
   private func askAgain(for index: Int, after prefix: String?, speak: Bool = true) {
     retake(page: index, inView: false); noteActivity()
-    let reason = unclear[pages[index].id] ?? "Page \(index + 1) is unclear."
-    guide = "\(reason) Show page \(index + 1) again, or give a thumbs-up to solve without it."
+    let reason = unclear[pages[index].id] ?? "\(pageName(index)) is unclear."
+    guide = "\(reason) Show \(pageName(index).lowercased()) again, or give a thumbs-up to solve without it."
     if speak { say([prefix, fixRequest(for: index)].compactMap { $0 }.joined(separator: " ")) }
   }
   private func fixRequest(for index: Int) -> String {
-    (unclear[pages[index].id] ?? "Page \(index + 1) is unclear.") + " Show page \(index + 1) again, or thumbs-up to solve without it."
+    (unclear[pages[index].id] ?? "\(pageName(index)) is unclear.") + " Show \(pageName(index).lowercased()) again, or thumbs-up to solve without it."
   }
 
   /// Hands-free failure: the glasses camera stays on so a thumbs-up retries without taking out the phone.
@@ -929,7 +993,7 @@ final class AutoScanModel {
 
   private func save(_ entries: [(number: Int, result: PageResult)], providers: String) {
     let id = runID, sources = pages.map(\.frames)
-    let missing = pages.indices.filter { leftOut.contains(pages[$0].id) }.map { String($0 + 1) }
+    let missing = pages.indices.filter { leftOut.contains(pages[$0].id) }.map(pageName)
     phase = .saving; progress = 1; guide = "Making your PDF…"
     worker = Task { [weak self] in
       guard let self else { return }
@@ -940,7 +1004,7 @@ final class AutoScanModel {
         result = saved; phase = .finished
         let review = solution.problems.contains { $0.reviewNote?.hasPrefix("NEEDS REVIEW") == true }
         guide = review ? "Your PDF is ready. Check items marked NEEDS REVIEW." : "Your PDF is ready."
-        if !missing.isEmpty { guide += " Left out unreadable: page \(missing.joined(separator: ", "))." }
+        if !missing.isEmpty { guide += " Left out unreadable: \(missing.joined(separator: ", "))." }
         // Keep the pages and cached answers so one page can be retaken and the PDF rebuilt quickly.
         // The next Start (or a new photo) begins a fresh packet; the PDF folder holds every original.
         try? draft.markSolved(); packetSolved = true

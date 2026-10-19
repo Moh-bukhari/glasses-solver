@@ -240,7 +240,13 @@ struct SolverClient: AITransport {
   dimensional or independent mathematical check. This is a student-facing worked solution.
   Never substitute a plan or 'solve similarly' for an answer. Use status insufficient_information for missing data,
   needs_review for unresolved uncertainty, and explain exactly what is missing in reviewNote.
-  Use plain readable Unicode math, x^2 and (a+b)/c. No LaTeX commands, HTML, Markdown tables or code fences.
+  Write every mathematical expression in LaTeX: inline math between single dollar signs, e.g. $u = U_0 + ax$, and each
+  key equation of a derivation as its own displayed equation between double dollar signs, e.g.
+  $$\\frac{\\partial u}{\\partial x} + \\frac{\\partial v}{\\partial y} = 0$$. Put units inside the math with \\mathrm, e.g.
+  $U_0 = 4.00\\ \\mathrm{m/s}$, $a = 1.20\\ \\mathrm{s^{-1}}$. Never write keyboard math such as x^2, s^-1, sqrt(x) or a/b outside
+  LaTeX. Steps form a full worked solution, as a textbook would print it: state the governing equation, substitute the
+  values, simplify and give the result, each as displayed math with a short sentence of explanation.
+  No HTML, Markdown tables or code fences.
   Return only the requested JSON. Do not shorten the required solution list to save tokens.
   """
   /// Keep source photos untouched. Transport copies fit every provider's native high-detail size.

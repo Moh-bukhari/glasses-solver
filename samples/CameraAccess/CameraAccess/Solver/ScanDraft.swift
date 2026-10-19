@@ -6,10 +6,14 @@ struct CapturedPage: Identifiable {
   let id: UUID
   /// Every photo of the page in capture order: one still, or several close-up frames of its parts.
   let frames: [URL]
+  /// Question numbers read on the page while scanning; the page is called by them ("Question 3").
+  var questions: [Int] = []
   /// The first photo: the page's thumbnail.
   var url: URL { frames[0] }
-  init(id: UUID, frames: [URL]) { self.id = id; self.frames = frames }
+  init(id: UUID, frames: [URL], questions: [Int] = []) { self.id = id; self.frames = frames; self.questions = questions }
   init(id: UUID, url: URL) { self.init(id: id, frames: [url]) }
+  /// "Question 3", "Questions 1 and 2", or "Page 4" when no question number was read.
+  func name(at index: Int) -> String { questions.isEmpty ? "Page \(index + 1)" : QuestionLabels.spoken(questions) }
   /// Decodes from disk; cache the result rather than calling this from a view body.
   func loadThumbnail() -> UIImage? {
     guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
@@ -28,6 +32,8 @@ struct ScanDraftStore {
       .appendingPathComponent("ScanDraft", isDirectory: true)
   }
   private var manifest: URL { directory.appendingPathComponent("pages.json") }
+  /// Question numbers per page id; absent in 2.2 and earlier drafts.
+  private var questionsFile: URL { directory.appendingPathComponent("questions.json") }
   private var solvedMarker: URL { directory.appendingPathComponent("solved") }
   /// Readable after the first unlock, so solving and the PDF can finish if the phone locks meanwhile.
   static let protection: Data.WritingOptions = .completeFileProtectionUntilFirstUserAuthentication
@@ -40,6 +46,7 @@ struct ScanDraftStore {
   }
   func load() -> [CapturedPage] {
     guard let data = try? Data(contentsOf: manifest), let ids = try? JSONDecoder().decode([UUID].self, from: data) else { return [] }
+    let questions = (try? Data(contentsOf: questionsFile)).flatMap { try? JSONDecoder().decode([UUID: [Int]].self, from: $0) } ?? [:]
     let pages: [CapturedPage] = ids.compactMap { id in
       var frames: [URL] = []
       while true {
@@ -47,7 +54,7 @@ struct ScanDraftStore {
         guard FileManager.default.fileExists(atPath: url.path) else { break }
         frames.append(url)
       }
-      return frames.isEmpty ? nil : CapturedPage(id: id, frames: frames)
+      return frames.isEmpty ? nil : CapturedPage(id: id, frames: frames, questions: questions[id] ?? [])
     }
     // Drafts saved by 1.x used complete protection, which is unreadable while the phone is locked.
     for url in pages.flatMap(\.frames) + [manifest] {
@@ -59,7 +66,7 @@ struct ScanDraftStore {
     try add(frames: [jpeg], to: pages, replacing: index)
   }
   /// Saves one page made of one or more photos. A replacement is written before the old photos are deleted.
-  func add(frames jpegs: [Data], to pages: [CapturedPage], replacing index: Int?) throws -> [CapturedPage] {
+  func add(frames jpegs: [Data], questions: [Int] = [], to pages: [CapturedPage], replacing index: Int?) throws -> [CapturedPage] {
     guard !jpegs.isEmpty else { throw SolverError.message("No photo to save for this page.") }
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let id = UUID(), urls = jpegs.indices.map { frameURL(id, $0) }
@@ -67,7 +74,7 @@ struct ScanDraftStore {
     catch { urls.forEach { try? FileManager.default.removeItem(at: $0) }; throw error }
     try? FileManager.default.removeItem(at: solvedMarker)
     var updated = pages
-    let page = CapturedPage(id: id, frames: urls)
+    let page = CapturedPage(id: id, frames: urls, questions: questions)
     if let index, updated.indices.contains(index) { updated[index] = page } else { updated.append(page) }
     do { try save(updated) }
     catch { urls.forEach { try? FileManager.default.removeItem(at: $0) }; throw error }
@@ -84,6 +91,8 @@ struct ScanDraftStore {
     if FileManager.default.fileExists(atPath: directory.path) { try FileManager.default.removeItem(at: directory) }
   }
   private func save(_ pages: [CapturedPage]) throws {
+    let questions = Dictionary(uniqueKeysWithValues: pages.filter { !$0.questions.isEmpty }.map { ($0.id, $0.questions) })
+    try JSONEncoder().encode(questions).write(to: questionsFile, options: [.atomic, Self.protection])
     try JSONEncoder().encode(pages.map(\.id)).write(to: manifest, options: [.atomic, Self.protection])
   }
 }

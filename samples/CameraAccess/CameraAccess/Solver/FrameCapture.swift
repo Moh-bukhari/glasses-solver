@@ -8,17 +8,26 @@ import Foundation
 enum QuestionLabels {
   /// "3." "3)" "(3)" "3:" "Q3" "Q.3" "#3" "Question 3" "Problem 3" "Exercise 3" "Ex. 3" "No. 3", optionally followed by text.
   /// Lines that merely start with a number in math ("3x + 2 = 5", "2.5", "10/19", "1,000") are not labels.
-  static func number(in line: String) -> Int? {
+  static func number(in line: String) -> Int? { label(in: line)?.number }
+  /// `heading` is true for a worded label ("Question 3", "Problem 3", "Q3"): a sheet's question number. A bare "3." may
+  /// also be a numbered list inside a question.
+  static func label(in line: String) -> (number: Int, heading: Bool)? {
     let text = line.trimmingCharacters(in: .whitespaces)
     let words = #"^(?:question|problem|exercise|prob\.?|ex\.?|no\.?|q\.?|#)\s*(\d{1,3})(?!\d|[.,:/]\d)"#
     let bare = #"^\(?(\d{1,3})(?:\)|[.:](?!\d))"#
-    for pattern in [words, bare] {
+    for (pattern, heading) in [(words, true), (bare, false)] {
       guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
         let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
         let range = Range(match.range(at: 1), in: text), let value = Int(text[range]), (1...200).contains(value) else { continue }
-      return value
+      return (value, heading)
     }
     return nil
+  }
+  /// Distinct worded question numbers in reading order.
+  static func headings(in lines: [String]) -> [Int] {
+    var seen: Set<Int> = [], ordered: [Int] = []
+    for line in lines { if let label = label(in: line), label.heading, seen.insert(label.number).inserted { ordered.append(label.number) } }
+    return ordered
   }
   /// "Question 3", "Questions 3 and 4", "Questions 1 to 5".
   static func spoken(_ numbers: [Int]) -> String {
@@ -82,7 +91,16 @@ struct ReadLine: Sendable, Equatable {
 struct FrameText: Sendable, Equatable {
   var lines: [ReadLine] = []
   /// Question numbers at the start of lines, top to bottom.
-  var labels: [Int] { QuestionLabels.numbers(in: lines.sorted { $0.box.maxY > $1.box.maxY }.map(\.text)) }
+  var labels: [Int] { QuestionLabels.numbers(in: readingOrder) }
+  /// Worded question numbers ("Question 3") only.
+  var headings: [Int] { QuestionLabels.headings(in: readingOrder) }
+  private var readingOrder: [String] { lines.sorted { $0.box.maxY > $1.box.maxY }.map(\.text) }
+  /// Height of the smaller printed lines (lower quartile of lines with 8+ characters), as a fraction of the frame height;
+  /// nil with fewer than 3 such lines. Large handwriting must not make small printed questions look readable.
+  var smallLineHeight: Double? {
+    let heights = lines.filter { $0.text.count >= 8 }.map { Double($0.box.height) }.sorted()
+    return heights.count >= 3 ? heights[heights.count / 4] : nil
+  }
   /// Words long enough to identify a view of the page (lowercase letters and digits). Words, not whole lines, so a line
   /// cut off at the frame edge and read slightly differently from frame to frame still matches.
   var signature: Set<String> { Self.words(lines.map(\.text)) }
@@ -100,6 +118,8 @@ struct PageFrames: Sendable {
   struct Configuration: Sendable, Equatable {
     /// Median text-line height, as a fraction of the frame height (20 px of 1280).
     var minLineHeight = 20.0 / 1280
+    /// The smaller read lines must be at least this tall (18 px of 1280), or the frame is not kept and the wearer moves closer.
+    var minReadLineHeight = 18.0 / 1280
     /// Consecutive analyzed frames with little image change before a frame may be kept.
     var steadyFrames = 3
     var steadyDifference = 0.08
@@ -122,6 +142,7 @@ struct PageFrames: Sendable {
     var quality: Double
     var signature: Set<String>
     var labels: Set<Int>
+    var headings: Set<Int> = []
     var fingerprint: [Double]
   }
   enum Decision: Sendable, Equatable {
@@ -133,6 +154,8 @@ struct PageFrames: Sendable {
   }
 
   let configuration: Configuration
+  /// The packet names questions with words ("Question 3"): bare numbers are lists inside a question, not new questions.
+  var headingsOnly = false
   private(set) var kept: [Kept] = []
   private(set) var lastNew: TimeInterval = 0
   private var previous: PageSample?
@@ -141,8 +164,16 @@ struct PageFrames: Sendable {
 
   var isEmpty: Bool { kept.isEmpty }
   var labels: Set<Int> { kept.reduce(into: Set<Int>()) { $0.formUnion($1.labels) } }
+  var headings: Set<Int> { kept.reduce(into: Set<Int>()) { $0.formUnion($1.headings) } }
+  /// The question numbers that name this page: worded headings when the packet uses them, otherwise any numbers.
+  func questions(headingsOnly: Bool) -> Set<Int> { headingsOnly ? headings : labels }
+  /// The printed text is big enough to keep the frame (see `FrameText.smallLineHeight`).
+  func isLegible(_ text: FrameText) -> Bool {
+    guard let height = text.smallLineHeight else { return true }
+    return height >= configuration.minReadLineHeight
+  }
   /// Numbers missing between the numbers seen on this page (at most `QuestionProgress.maxGap` apart).
-  var missing: [Int] { QuestionProgress.gaps(in: labels) }
+  var missing: [Int] { QuestionProgress.gaps(in: questions(headingsOnly: headingsOnly)) }
 
   /// Every analyzed frame: is it steady, readable and big enough to be worth reading and keeping?
   /// A view with no text found (a figure, faint handwriting) needs twice as long to be kept.
@@ -164,7 +195,8 @@ struct PageFrames: Sendable {
   mutating func offer(_ sample: PageSample, text: FrameText, id: Int, at time: TimeInterval) -> Decision {
     let quality = Self.quality(sample, text: text)
     let signature = text.signature, labels = Set(text.labels)
-    let candidate = Kept(id: id, time: time, quality: quality, signature: signature, labels: labels, fingerprint: sample.fingerprint)
+    let candidate = Kept(id: id, time: time, quality: quality, signature: signature, labels: labels,
+      headings: Set(text.headings), fingerprint: sample.fingerprint)
     let newLabels = labels.subtracting(self.labels)
     let sameViews = kept.indices.filter { isSameView(kept[$0], candidate) }
     if let index = sameViews.max(by: { closeness(kept[$0], candidate) < closeness(kept[$1], candidate) }) {
@@ -211,8 +243,10 @@ struct PageFrames: Sendable {
 
   private func isSameView(_ a: Kept, _ b: Kept) -> Bool {
     if comparesText(a, b) { return similarity(a, b) >= configuration.sameView }
-    return !a.fingerprint.isEmpty && a.fingerprint.count == b.fingerprint.count
-      && Self.difference(a.fingerprint, b.fingerprint) <= configuration.sameViewImage
+    guard !a.fingerprint.isEmpty, a.fingerprint.count == b.fingerprint.count else { return false }
+    // Little readable text: the same question number in a similar image is the same view (hands and small head motion vary).
+    let limit = !a.labels.isEmpty && a.labels == b.labels ? configuration.sameViewImage * 2 : configuration.sameViewImage
+    return Self.difference(a.fingerprint, b.fingerprint) <= limit
   }
   /// Enough readable words on both frames to compare views by text rather than by image.
   private func comparesText(_ a: Kept, _ b: Kept) -> Bool {

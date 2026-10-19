@@ -580,7 +580,7 @@ final class AutoScanTests: XCTestCase {
     XCTAssertEqual(note?.label, "Page 1"); XCTAssertEqual(note?.sourcePages, [1])
     XCTAssertTrue(note?.reviewNote?.hasPrefix("NEEDS REVIEW") == true, note?.reviewNote ?? "")
     XCTAssertEqual(saver.lastPage?.problems.last?.label, "1(a) p2")
-    XCTAssertTrue(model.guide.contains("Left out unreadable: page 1"), model.guide)
+    XCTAssertTrue(model.guide.contains("Left out unreadable: Page 1."), model.guide)
     let calls = await solver.calls
     XCTAssertEqual(calls, 2, "The unreadable photo is never sent again.")
     model.stop()
@@ -683,13 +683,14 @@ final class AutoScanTests: XCTestCase {
     model.start(); await waitUntil { model.phase == .seeking }
     try await sendFrames(camera, model: model, seconds: 1.5)
     XCTAssertEqual(model.phase, .seeking, "One view does not end the page while new views may follow.")
-    XCTAssertTrue(model.guide.contains("1 photo, questions 1 and 2"), model.guide)
-    await analyzer.setContent(0.3); await analyzer.setText(text(viewB)) // the wearer looks lower on the page
+    XCTAssertTrue(model.guide.contains("Questions 1 and 2: 1 photo"), model.guide)
+    await analyzer.setContent(0.3); await analyzer.setText(text(rest)) // the wearer looks lower, at the rest of question 2
     try await sendFrames(camera, model: model, seconds: 6)
     await waitUntil { model.phase == .awaitingNext }
     XCTAssertEqual(model.phase, .awaitingNext, model.guide)
-    XCTAssertEqual(model.pages.count, 1); XCTAssertEqual(model.pages[0].frames.count, 2, "Both views are photos of page 1.")
-    XCTAssertTrue(model.guide.contains("Page 1 saved: 2 photos, questions 1 to 4"), model.guide)
+    XCTAssertEqual(model.pages.count, 1); XCTAssertEqual(model.pages[0].frames.count, 2, "Both views are photos of questions 1 and 2.")
+    XCTAssertEqual(model.pages[0].questions, [1, 2])
+    XCTAssertTrue(model.guide.contains("Questions 1 and 2 saved: 2 photos."), model.guide)
     XCTAssertEqual(camera.captures, 0, "No full-resolution still, so the preview never pauses.")
     XCTAssertEqual(camera.stops, 1, "Only the start-of-scan reset stops the camera.")
     let reads = await analyzer.reads
@@ -705,14 +706,17 @@ final class AutoScanTests: XCTestCase {
     model.start(); await waitUntil { model.phase == .seeking }
     try await sendFrames(camera, model: model, seconds: 1.5)
     XCTAssertTrue(voice.messages.contains("Questions 1 and 2."), "\(voice.messages)")
-    await analyzer.setContent(0.3)
-    await analyzer.setText(text(["4. Graph y equals two x plus one", "5. Find the area of the circle", "Use the grid provided below"]))
-    try await sendFrames(camera, model: model, seconds: 4)
+    await analyzer.setContent(0.3); await analyzer.setText(text(viewC)) // questions 4 and 5: question 3 was skipped
+    for _ in 0..<15 where !voice.messages.contains(where: { $0.contains("isn't captured") }) {
+      camera.onFrame?(paperImage().cgImage!); try await Task.sleep(for: .milliseconds(350))
+    }
+    XCTAssertTrue(voice.messages.contains("Questions 1 and 2 saved."), "A new question saves the one before. \(voice.messages)")
     XCTAssertTrue(voice.messages.contains("Questions 4 and 5."), "\(voice.messages)")
     XCTAssertTrue(voice.messages.contains("Question 3 isn't captured yet. Look at it again."), "\(voice.messages)")
-    XCTAssertEqual(model.phase, .seeking, "A missing question keeps the page open longer instead of saving it at once.")
     await analyzer.setContent(0.6); await analyzer.setText(text(viewB)) // the wearer looks back at question 3
-    try await sendFrames(camera, model: model, seconds: 1.5)
+    for _ in 0..<12 where !voice.messages.contains("Question 3.") {
+      camera.onFrame?(paperImage().cgImage!); try await Task.sleep(for: .milliseconds(350))
+    }
     XCTAssertTrue(voice.messages.contains("Question 3."), "\(voice.messages)")
     XCTAssertEqual(voice.messages.filter { $0.contains("isn't captured") }.count, 1, "Each gap is mentioned once.")
     model.stop()
@@ -751,12 +755,61 @@ final class AutoScanTests: XCTestCase {
       camera.onFrame?(paperImage().cgImage!); try await Task.sleep(for: .milliseconds(350))
     }
     try await sendFrames(camera, model: model, seconds: 2)
-    XCTAssertTrue(voice.messages.contains { $0.hasPrefix("Still page 1.") }, "\(voice.messages)")
+    XCTAssertTrue(voice.messages.contains { $0.hasPrefix("Still questions 1 and 2.") }, "\(voice.messages)")
     XCTAssertEqual(model.pages.count, 1)
     await analyzer.setContent(0.9); await analyzer.setText(text(viewB)) // now the next sheet
     try await sendFrames(camera, model: model, seconds: 1.5)
     model.handle(.next); await waitUntil { model.pages.count == 2 }
     XCTAssertEqual(model.pages.count, 2, "New writing is the next page.")
+    model.stop()
+  }
+  /// Sends preview frames, whatever the phase, until `done` (at most `limit` frames, one every 350 ms).
+  private func show(_ camera: FakeScanCamera, limit: Int = 20, until done: () -> Bool) async throws {
+    for _ in 0..<limit where !done() { camera.onFrame?(paperImage().cgImage!); try await Task.sleep(for: .milliseconds(350)) }
+  }
+  func testEachQuestionIsAPageNamedByItsNumberAndComingBackAddsToIt() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: frameSample()), solver = FakePageSolver(), saver = FakeSolutionSaver(), voice = FakeScanVoice()
+    let model = makeModel(camera, analyzer, solver, saver, capture: .frames, voice: voice)
+    await analyzer.setText(text(question1))
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await sendFrames(camera, model: model, seconds: 1.5)
+    XCTAssertTrue(model.guide.hasPrefix("Question 1: 1 photo"), "Numbered lists inside a question are not questions. \(model.guide)")
+    await analyzer.setContent(0.3); await analyzer.setText(text(question2)) // the next question, on the same sheet
+    try await show(camera) { model.pages.count == 1 && voice.messages.contains("Question 2.") }
+    XCTAssertTrue(voice.messages.contains("Question 1 saved."), "\(voice.messages)")
+    XCTAssertEqual(model.phase, .seeking, "Question 2 is scanned without a page turn or gesture.")
+    await analyzer.setContent(0.6); await analyzer.setText(text(question1Lower)) // back to question 1 for a clearer look
+    try await show(camera, limit: 30) { model.phase == .awaitingNext && model.pages.count == 2 && model.pages[0].frames.count == 2 }
+    XCTAssertEqual(model.pages.map(\.questions), [[1], [2]], "Question 1 is not added a second time.")
+    XCTAssertEqual(model.pages[0].frames.count, 2, "The new photo joins question 1's photos.")
+    XCTAssertEqual(model.pages.indices.map { model.pages[$0].name(at: $0) }, ["Question 1", "Question 2"])
+    XCTAssertTrue(model.guide.hasPrefix("Question 1 updated: 2 photos."), model.guide)
+    model.handle(.finish); await waitUntil { model.phase == .finished }
+    XCTAssertEqual(saver.frameCounts, [2, 1])
+    let names = await solver.jobs.map(\.title)
+    XCTAssertTrue(names.contains("Question 1") && names.contains("Question 2"), "The AI names pages by question: \(names)")
+    model.stop()
+  }
+  func testARetakeIgnoresAnotherQuestionAndSaysWhichOneToShow() async throws {
+    let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
+    let analyzer = FakePageAnalyzer(sample: frameSample()), voice = FakeScanVoice()
+    let model = makeModel(camera, analyzer, FakePageSolver(), FakeSolutionSaver(), capture: .frames, voice: voice)
+    await analyzer.setText(text(question1))
+    model.start(); await waitUntil { model.phase == .seeking }
+    try await sendFrames(camera, model: model, seconds: 1.5)
+    model.handle(.next); await waitUntil { model.phase == .awaitingNext && model.pages.count == 1 }
+    let original = model.pages[0].id
+    model.handle(.previous)
+    XCTAssertEqual(model.phase, .seeking); XCTAssertTrue(model.guide.hasPrefix("Retaking question 1."), model.guide)
+    await analyzer.setContent(0.3); await analyzer.setText(text(question2))
+    try await show(camera, limit: 8) { false }
+    XCTAssertTrue(voice.messages.contains("That's question 2. Show question 1."), "\(voice.messages)")
+    XCTAssertEqual(model.pages.map(\.id), [original], "Question 2 is not saved as question 1.")
+    await analyzer.setContent(0.6); await analyzer.setText(text(question1Lower))
+    try await show(camera, limit: 30) { model.pages.first?.id != original && model.phase == .awaitingNext }
+    XCTAssertEqual(model.pages.count, 1); XCTAssertNotEqual(model.pages[0].id, original)
+    XCTAssertEqual(model.pages[0].questions, [1])
     model.stop()
   }
   func testThumbsUpBeforeAnyFrameIsKeptDoesNotFinish() async throws {
@@ -860,7 +913,7 @@ final class AutoScanTests: XCTestCase {
     for _ in 0..<10 { camera.onFrame?(paperImage().cgImage!); try await Task.sleep(for: .milliseconds(350)) }
     XCTAssertEqual(model.phase, .awaitingNext); XCTAssertEqual(camera.captures, 1)
     model.handle(.next); XCTAssertEqual(model.phase, .seeking)
-    XCTAssertTrue(model.guide.contains("Page 4"), model.guide)
+    XCTAssertTrue(model.guide.contains("Next page"), model.guide)
     model.stop()
   }
   func testQuestionSkippedByBothNeighborsIsClaimedBeforeThePDF() async throws {
@@ -974,6 +1027,13 @@ final class AutoScanTests: XCTestCase {
   }
   private let viewA = ["1. Solve for x in 2x + 3 = 11", "2. Find the slope of the line", "Show all of your work clearly"]
   private let viewB = ["3. Factor x squared minus nine", "4. Graph y equals two x plus one", "Use the grid provided below"]
+  /// The lower part of question 2: no question number in view.
+  private let rest = ["through the points (1, 2) and (3, 8)", "then write its equation in slope form", "Label both of the axes"]
+  private let viewC = ["4. Compute the integral of cosine", "5. Find the area of the circle", "Express each answer exactly"]
+  /// A packet that names its questions: the numbered lines are parts of the question.
+  private let question1 = ["Question 1: A tank holds water at rest", "1. Find the gauge pressure at the bottom", "2. Find the force on the side wall"]
+  private let question1Lower = ["Question 1 (continued): the gauge reads 360 Pa", "3. Find the depth of the water column", "Take g equal to 9.81 m/s squared"]
+  private let question2 = ["Question 2: A piston moves in a cylinder", "(a) Find the work done by the gas", "(b) Find the heat added to the gas"]
   private func sendStableFrames(_ camera: FakeScanCamera, model: AutoScanModel, count: Int = 8) async throws {
     let image = paperImage().cgImage!
     for _ in 0..<count {

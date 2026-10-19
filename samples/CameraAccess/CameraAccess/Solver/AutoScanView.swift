@@ -261,7 +261,7 @@ private struct PageQueueView: View {
                 }.frame(width: 110, height: 125).background(.black).clipShape(RoundedRectangle(cornerRadius: 10))
                 badge(states[page.id]).padding(5)
               }
-              Text("Page \(index + 1)").font(.caption.bold())
+              Text(page.name(at: index)).font(.caption.bold()).lineLimit(2).multilineTextAlignment(.center)
               if case .failed(let message)? = states[page.id] {
                 Text(message).font(.caption2).foregroundStyle(.orange).lineLimit(3)
               }

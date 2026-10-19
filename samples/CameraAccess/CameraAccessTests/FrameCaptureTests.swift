@@ -112,6 +112,39 @@ final class FrameCaptureTests: XCTestCase {
     XCTAssertEqual(frames.offer(sample(content: 3), text: FrameText(), id: 9, at: 9), .full)
   }
 
+  func testWordedHeadingsAreTheQuestionNumbersWhenAPacketUsesThem() {
+    XCTAssertEqual(["Question 3: Find F", "Q4 Simplify", "Problem 6. Factor", "3. Find p", "(2) Graph"].map { QuestionLabels.label(in: $0)?.heading },
+      [true, true, true, false, false])
+    XCTAssertEqual(QuestionLabels.headings(in: ["Question 3: A tank", "1. Find p", "3. Find F", "Question 3 (continued)", "Question 4"]), [3, 4])
+    var frames = PageFrames()
+    _ = frames.offer(sample(), text: text(["Question 3: A tank holds water", "1. Find the gauge pressure", "3. Find the force on the wall"]), id: 1, at: 0)
+    XCTAssertEqual(frames.missing, [2], "Read as bare numbers, the parts look like a skipped question 2.")
+    frames.headingsOnly = true
+    XCTAssertEqual(frames.questions(headingsOnly: true), [3]); XCTAssertEqual(frames.missing, [], "They are parts of question 3.")
+  }
+
+  func testSmallPrintedTextIsNotLegibleEvenNextToLargeHandwriting() {
+    func lines(_ heights: [Double]) -> FrameText {
+      FrameText(lines: heights.enumerated().map { index, height in
+        ReadLine(text: "Line \(index) of printed text", confidence: 1, box: CGRect(x: 0.1, y: 0.1 * Double(index), width: 0.8, height: height / 1280))
+      })
+    }
+    let frames = PageFrames()
+    XCTAssertFalse(frames.isLegible(lines([10, 10, 10, 60, 60])), "8-10 px print is unreadable; big handwriting doesn't make up for it.")
+    XCTAssertTrue(frames.isLegible(lines([24, 26, 28, 60])))
+    XCTAssertTrue(frames.isLegible(lines([10, 60])), "Too few lines to judge: the image checks decide.")
+  }
+
+  func testTheSameQuestionInASimilarImageIsOneViewEvenWithFewWords() {
+    var frames = PageFrames()
+    XCTAssertEqual(frames.offer(sample(content: 0.05), text: text(["3. x + 2 = 5"]), id: 1, at: 0), .added(1))
+    XCTAssertEqual(frames.offer(sample(content: 0.25), text: text(["3. x + 2 = 5"]), id: 2, at: 1), .duplicate,
+      "A hand or a small head motion changes the image, not the view.")
+    var unlabeled = PageFrames()
+    _ = unlabeled.offer(sample(content: 0.05), text: FrameText(), id: 1, at: 0)
+    XCTAssertEqual(unlabeled.offer(sample(content: 0.25), text: FrameText(), id: 2, at: 1), .added(2))
+  }
+
   func testQuestionListsAreSpokenNaturally() {
     XCTAssertEqual(QuestionLabels.spoken([3]), "Question 3")
     XCTAssertEqual(QuestionLabels.spoken([4, 3]), "Questions 3 and 4")

@@ -1,8 +1,10 @@
-# Glasses Solver 2.2: fast live capture, start from a shortcut, control everything with your thumb
+# Glasses Solver 2.3: pages named by question, typeset math, start from a shortcut, control everything with your thumb
 
 You don't need to take out your phone during a scan. Start it with a shortcut (Action button, Back Tap, Control Center or Siri), scan by looking at each page, and use three thumb gestures. If the AI can't read a page, the glasses ask for that page again and then finish the PDF; you never have to tap Retake on the phone.
 
-2.2 no longer takes one slow full-resolution photo per page. It keeps the clearest moments of the live camera, several per page, so there's no pause between photos. Each question number is read on the phone and announced as it's captured, and a skipped number is asked for. Each page is solved in its own streaming request while you keep scanning. When you finish, only the last page is left, so the PDF arrives about one page-solve later. Directions play quietly through the glasses only. Voice commands and glasses buttons are off by default.
+2.3 names everything by the question number printed on the sheet ("Question 3 saved", "Show question 3 again"), so you always know which sheet is meant. Moving on to the next question saves the one before; coming back to a question adds photos to it instead of making a second copy. The PDF shows the math typeset as a full worked solution, not keyboard math.
+
+Since 2.2 the app no longer takes one slow full-resolution photo per page. It keeps the clearest moments of the live camera, several per page, so there's no pause between photos. Each question number is read on the phone and announced as it's captured, and a skipped number is asked for. Each page is solved in its own streaming request while you keep scanning. When you finish, only the last page is left, so the PDF arrives about one page-solve later. Directions play quietly through the glasses only. Voice commands and glasses buttons are off by default.
 
 ## Install from Windows
 
@@ -31,10 +33,10 @@ The phone must be unlocked, because the app has to be on screen for the glasses 
 ## Scan a packet
 
 1. Start with the shortcut (or tap **Start scanning**). You hear "Ready".
-2. Look closely at the top of the first page: about a hand's width of text at a time, close enough that the small writing is sharp. Hold still for about half a second. Quiet directions (left / right / tilt / closer / hold still) guide you.
-3. You hear each question number as it is captured ("Questions 1 and 2."). Move down the page to the next questions. If a number is skipped, you hear "Question 3 isn't captured yet. Look at it again."
-4. When nothing new has appeared for about 3 seconds, the page is saved: "Page 1 saved: 3 photos, questions 1 to 4." Or give 👉 to save it right away.
-5. Turn to the next page; new writing starts the next page automatically. Pages are solved in the background as you go.
+2. Look closely at the first question: about a hand's width of text at a time, close enough that the small printed writing is sharp. Hold still for about half a second. Quiet directions (left / right / tilt / closer / hold still) guide you. "Move a little closer: the printed text is too small to read" means the photo wasn't kept.
+3. You hear each question number as it is captured ("Question 1."). Move down to the rest of the question. If a number is skipped, you hear "Question 3 isn't captured yet. Look at it again."
+4. Look at the next question. The one before is saved by itself ("Question 1 saved."), and the new one is scanned straight away, on the same sheet or the next. A question you've finished with is also saved after about 3 seconds with nothing new ("Question 2 saved: 3 photos."), or right away with 👉.
+5. Turn pages as you go. Going back to an earlier question adds the new photos to it ("Question 1 updated"). Questions are solved in the background as you go.
 6. When you're done, give a **thumbs-up**. The page in front of you is saved first. You hear "Done scanning. Solving." The PDF opens on the phone as soon as the last page is solved.
 
 Prefer one big photo per page? Settings → Capture → **Full-resolution photo**. It is sharper for a whole page at arm's length, but each photo pauses the camera and takes several seconds.
@@ -46,8 +48,8 @@ Make a fist with your thumb straight out. Hold it in front of you, in the middle
 | Gesture | Meaning |
 | --- | --- |
 | 👍 Thumb **up** | **Start solution.** Finish scanning and make the PDF. |
-| 👉 Thumb to **your right** | **Next page.** Save the page you're scanning now, or start the next page when a look-alike page wasn't noticed. |
-| 👈 Thumb to **your left** (👎 thumb down also works) | **Previous page.** Retakes the page you just scanned. Do it again to go one more page back. Turn back to that page and it's captured when steady; the old photo stays until the new one is clear. |
+| 👉 Thumb to **your right** | **Next page.** Save the question you're scanning now, or start the next one when a look-alike page wasn't noticed. |
+| 👈 Thumb to **your left** (👎 thumb down also works) | **Previous page.** Retakes the question you just scanned. Do it again to go one more back. Turn back to it and it's captured when steady; the old photos stay until the new one is clear. |
 
 - Thumb right is easiest with your right hand, and thumb left with your left hand, palm turned up or toward you. Keep the thumb level for left and right, and straight up or down for the others. Diagonal thumbs are ignored on purpose.
 - Hands holding, pinching or resting on the paper are ignored, and the app never photographs a raised hand.
@@ -55,8 +57,8 @@ Make a fist with your thumb straight out. Hold it in front of you, in the middle
 
 ## When the AI can't read a page
 
-- **During the scan** you hear, for example, "Page 3: the bottom line is cut off. I'll ask for it again when you finish." Keep scanning.
-- **After 👍** the glasses ask: "Show page 3 again, or thumbs-up to solve without it." Turn to page 3 and hold it steady. It's captured once the view changes to it (or after a few seconds if you were already showing it), and solving continues by itself.
+- **During the scan** you hear, for example, "Question 3: the bottom line is cut off. I'll ask for it again when you finish." Keep scanning. The AI asks only when a part can't be read in any of that question's photos.
+- **After 👍** the glasses ask: "Show question 3 again, or thumbs-up to solve without it." Turn to question 3 and hold it steady. Showing a different question gets "That's question 4. Show question 3." It's captured once the view changes to it (or after a few seconds if you were already showing it), and solving continues by itself.
 - **👍 instead** makes the PDF without that page. The PDF lists it as **NEEDS REVIEW** with its photo, so you can see what's missing.
 - **Network or provider failure** after retries: you hear the reason and "Give a thumbs-up to try again". The camera stays on for that thumbs-up; already solved pages aren't sent again.
 
@@ -82,9 +84,9 @@ Make a fist with your thumb straight out. Hold it in front of you, in the middle
 
 ## Limits and privacy
 
-- Up to **30 pages** per packet.
+- Up to **30 questions** (saved pages) per packet.
 - Each page request includes that page plus its previous and next pages, labeled, so questions that continue across pages are solved once.
-- Answers include worked steps, a final answer, and a check. Uncertain items are marked **NEEDS REVIEW**. Compare the transcriptions with your photos.
+- Answers are full worked solutions with typeset math (equations, fractions, units), a final answer, and a check. Uncertain items are marked **NEEDS REVIEW**; when a number reads differently in different photos, both readings are shown. Compare the transcriptions with your photos.
 - Keys stay in separate iPhone Keychain entries and go only to their own provider.
 - Gesture detection and speech stay on the phone.
 
