@@ -1,6 +1,6 @@
 # Glasses Solver: instructions for coding agents
 
-The active personal app lives on `solver-app` in `samples/CameraAccess`. Start with [AI-HANDOFF.md](AI-HANDOFF.md), [SOLVER-SETUP.md](SOLVER-SETUP.md), and [tasks/lessons.md](tasks/lessons.md). The handoff records the user goal, architecture, actual workflows, build/test/install commands, release evidence and remaining device checks without requiring earlier chat history.
+The active personal app lives on branch `claude/pensive-allen-ggkllj` (2.x; `solver-app` holds 1.x) in `samples/CameraAccess`. Start with [README.md](README.md), [AI-HANDOFF.md](AI-HANDOFF.md), [SOLVER-SETUP.md](SOLVER-SETUP.md), and [tasks/lessons.md](tasks/lessons.md). The handoff records the user goal, architecture, actual workflows, build/test/install commands, release evidence and remaining device checks without requiring earlier chat history.
 
 - Inspect current branch, code, uncommitted work and latest user requirements before editing. The repository contains other upstream sample apps; they are not the Glasses Solver target.
 - Preserve forgiving close-up capture, ordered saved pages, explicit Finish before solver uploads, quiet cues, complete-answer validation and retained drafts on failure.

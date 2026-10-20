@@ -9,7 +9,7 @@ enum SolverMode: String, CaseIterable, Identifiable, Sendable {
   case openAI, claude, both
   var id: String { rawValue }
   var name: String {
-    switch self { case .openAI: return "OpenAI"; case .claude: return "Claude"; case .both: return "Both · cross-check (slower)" }
+    switch self { case .openAI: return "OpenAI"; case .claude: return "Claude"; case .both: return "Both · Claude + OpenAI (best)" }
   }
 }
 struct AICredential: Sendable {
@@ -87,8 +87,9 @@ struct SolverConfiguration: Sendable {
   var claudeModel = SolverConfiguration.claudeDefault
   /// Use the providers' paid speed lanes (Claude fast mode, OpenAI Ultrafast/Fast); they fall back by themselves.
   var fastTiers = true
-  var lead: AICredential { credential(mode == .claude ? .claude : .openAI) }
-  var peer: AICredential? { mode == .both ? credential(.claude) : nil }
+  /// With both providers, Claude Opus 5.5 (the more accurate reader) leads: it writes one draft and reconciles both.
+  var lead: AICredential { credential(mode == .openAI ? .openAI : .claude) }
+  var peer: AICredential? { mode == .both ? credential(.openAI) : nil }
   /// Results are cached per setup: changing provider or model re-solves pages instead of mixing answers.
   var setup: String { "\(mode.rawValue)|\(lead.model)|\(peer?.model ?? "")" }
   var summary: String {

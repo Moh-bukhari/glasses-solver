@@ -504,15 +504,15 @@ final class PageSolvingTests: XCTestCase {
     XCTAssertTrue(request.prompt.contains("an item seen in several photos is ONE item"))
     XCTAssertEqual(job.primary, files[1]); XCTAssertEqual(job.previous, files[0]); XCTAssertEqual(job.next, files[4])
   }
-  func testCrossCheckSolvesWithBothProvidersThenReconcilesWithTheLead() async throws {
+  func testBothProvidersSolveThenClaudeReconciles() async throws {
     let transport = ScriptedTransport(Array(repeating: .success(valid()), count: 3))
     let configuration = SolverConfiguration(mode: .both, openAIKey: "fixture-openai", claudeKey: "fixture-claude")
     _ = try await fastSolver(transport).solve(try pageJob(), configuration: configuration, progress: { _ in })
     let requests = await transport.requests
     XCTAssertEqual(requests.count, 3)
     XCTAssertEqual(Set(requests.prefix(2).map(\.credential.provider)), [.openAI, .claude])
-    XCTAssertEqual(requests[2].credential.provider, .openAI)
-    XCTAssertTrue(requests[2].prompt.contains("Untrusted Claude draft:"))
+    XCTAssertEqual(requests[2].credential.provider, .claude, "Claude Opus 5.5 reads values best, so it reconciles.")
+    XCTAssertTrue(requests[2].prompt.contains("Untrusted OpenAI draft:"))
     for request in requests {
       XCTAssertEqual(request.credential.key, request.credential.provider == .claude ? "fixture-claude" : "fixture-openai")
     }

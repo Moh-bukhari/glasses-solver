@@ -1,14 +1,76 @@
 # Glasses Solver
 
-**Continuing this project with an AI? Read [AI-HANDOFF.md](AI-HANDOFF.md) first.** It covers the goal, complete workflows, code map, setup/build/test instructions, known issues, verification evidence and next priorities. The current app is on [`solver-app`](https://github.com/Moh-bukhari/glasses-solver/tree/solver-app).
+A personal iPhone app that turns photos of homework or exam-style question pages into complete worked solutions: a PDF, plus pictures sized for a **Casio fx-CG50** calculator screen. It started as a hands-free scanner for **Ray-Ban Meta Gen 2** glasses, built on Meta's Wearables Device Access Toolkit (this repository is a fork of Meta's SDK samples).
 
-Personal iPhone app (1.3.1): **scan papers → say “finish scanning” → OpenAI + Claude review → one combined PDF**.
+> **AI agents: read this page, then [AI-HANDOFF.md](AI-HANDOFF.md) (full operating guide), [SOLVER-SETUP.md](SOLVER-SETUP.md) (what the user does) and [tasks/lessons.md](tasks/lessons.md) (mistakes not to repeat).** Everything needed to continue is in the repository; no chat history is required.
 
-See [installation and usage](SOLVER-SETUP.md). Download the IPA from a successful [cloud build on solver-app](https://github.com/Moh-bukhari/glasses-solver/actions/workflows/build-solver.yml), with both build and verification jobs passing. Code is developed on the `solver-app` branch (PR #1).
+## Where the code is
 
-Capture close-up photos with directional voice cues, saved-page announcements, and a quiet 5% speech default. No clean background, paper corners, OCR or image cleanup is required. Collect up to 12 photos before any AI upload; drafts survive pauses and failures. OpenAI and Claude can independently solve the packet and reconcile their answers against a question/subpart checklist. Single-provider modes are also available. One PDF contains all inventoried answers, review flags and source photos.
+| What | Where |
+| --- | --- |
+| Active branch | [`claude/pensive-allen-ggkllj`](https://github.com/Moh-bukhari/glasses-solver/tree/claude/pensive-allen-ggkllj) (all 2.x work). `solver-app` holds 1.x; `main` is Meta's upstream sample plus pointers. |
+| The app | [`samples/CameraAccess`](samples/CameraAccess) (Xcode project `CameraAccess.xcodeproj`, app name "Glasses Solver"). Everything else under `samples/` is Meta's untouched sample code. |
+| App logic | [`samples/CameraAccess/CameraAccess/Solver/`](samples/CameraAccess/CameraAccess/Solver) |
+| Tests | [`samples/CameraAccess/CameraAccessTests/`](samples/CameraAccess/CameraAccessTests) |
+| Build and IPA | [`.github/workflows/build-solver.yml`](.github/workflows/build-solver.yml): run it manually on the active branch; it runs the simulator tests and produces an unsigned `GlassesSolver-IPA` artifact |
 
-Keep the app foregrounded and unlocked. On-device English voice commands require microphone/speech permission; visible controls remain available. Simulator fixtures do not verify physical glasses, microphone routing or mathematical accuracy with live APIs.
+## What the app does now (2.7)
+
+1. **Import.** The user picks the clearest photo of each question page from Photos, in order (`AutoScanModel.importPhotos`). Each photo becomes a page in a draft that survives restarts (`ScanDraftStore`).
+2. **Solve with both AIs.** Each page is sent with its previous and next page as context. Claude Opus 5.5 and GPT-6 Astra each solve it, then Claude reconciles both drafts against the photo (`PageSolver`, `SolverConfiguration` mode `.both`; one provider if only one key is saved). Answers are strict JSON with a checklist of every visible question label, validated before they are accepted. Unresolved items are marked NEEDS REVIEW.
+3. **Output: one folder per packet**, in Files › On My iPhone › Glasses Solver › Solutions › `<date time title>`:
+   - `Solutions.pdf`: every worked solution with typeset math, plus the source photos.
+   - Calculator pictures: every solution rendered as fx-CG50 `.g3p` pictures (384x216), split across as many screens as needed so nothing needs zooming, plus an answers summary. Copy them to the calculator over USB.
+4. **Optional glasses scanning** (2.0 to 2.6, still in the app): hands-free capture with Ray-Ban Meta glasses, either the live video stream or capture-button photos imported by Meta AI, with an AI check that each page is readable before moving on. The user found the video too blurry and Meta AI's auto-import unreliable, so manual import is now the main path.
+
+## Architecture in one picture
+
+```
+Photos picker / glasses ──> AutoScanModel (pages, draft, state machine)
+                              │
+                              ├─ PageChecker      (glasses modes only: "is this page readable?")
+                              ├─ PageSolver       (per page: Claude + OpenAI drafts -> Claude reconciles; retries, repair, speed lanes)
+                              │     └─ SolverClient (HTTP + streaming for both providers, strict JSON schemas, prompts)
+                              ├─ PagePlan.combine (merge pages, drop repeats, coverage summary)
+                              └─ SolutionStore    (folder per packet: PDF via SolutionPDF/MathText, calculator pictures)
+```
+
+Key files (all under `samples/CameraAccess/CameraAccess/`):
+
+| File | Role |
+| --- | --- |
+| `Solver/AutoScanModel.swift` | The coordinator: import, glasses scanning, page checks, solve jobs, finishing, saving |
+| `Solver/AutoScanView.swift` | Main screen (photo picker, Solve, page queue), PDF list |
+| `Solver/PageSolver.swift` | Page jobs, cross-check solving, page checks, result validation, combining pages |
+| `Solver/BatchSolver.swift` | Provider configuration and models, request bodies, prompts and schemas, streaming parser, speed lanes |
+| `Solver/SolverService.swift` | Packet folder, PDF rendering |
+| `Solver/MathText.swift` | LaTeX in answers: typeset for the PDF (SwiftMath), plain Unicode fallback |
+| `Solver/ScanDraft.swift` | The page draft on disk |
+| `Solver/ButtonPhotos.swift`, `PhotoLibraryInbox.swift` | Capture-button photos from the photo library (2.6) |
+| `Solver/AutoScanCamera.swift`, `FrameCapture.swift`, `ScanQuality.swift`, `HandGestures.swift`, `ScanVoice.swift` | Glasses camera stream, frame selection, on-device image checks, hand gestures, spoken cues |
+| `Views/SolverView.swift` | Settings, API keys (Keychain), settings migrations |
+
+## Build, test, install
+
+- There is no Mac in the loop. CI (`build-solver.yml`, macOS 26, Xcode 26.4, Swift 6) builds the app, runs the simulator tests (`AutoScanTests`, `PageSolvingTests`, `HandGestureTests`, `GlassesInputTests`, `FrameCaptureTests`, `MathTextTests` and newer suites listed in the workflow), and uploads `GlassesSolver-IPA`.
+- The user installs the unsigned IPA from Windows with **iloader**, over the existing app so keys and drafts are kept.
+- API keys (Anthropic and OpenAI) are entered in the app's Settings and stored in the iPhone Keychain. Never put keys, Apple credentials or personal photos in the repository, docs or logs.
+- Live API calls, the physical glasses and the calculator are only tested by the user on their devices. CI uses fake AI answers.
+
+## Status and what is unverified
+
+See the snapshot at the top of [AI-HANDOFF.md](AI-HANDOFF.md) for the exact commit, CI run and artifact of the latest build, and its "Next priorities" for open device checks (live API accuracy and latency, calculator pictures on a real fx-CG50, glasses features).
+
+## Version history (short)
+
+| Version | Change |
+| --- | --- |
+| 1.x | Phone photos of pages, one combined OpenAI + Claude review, one PDF |
+| 2.0-2.1 | Hands-free glasses scanning with hand gestures, per-page streaming solving, start shortcut |
+| 2.2-2.3 | Live multi-frame capture from the glasses video, typeset math in the PDF |
+| 2.4-2.5 | AI check of each page before the next; best models (Claude Opus 5.5, GPT-6 Astra) with paid speed lanes |
+| 2.6 | Capture-button photos imported by Meta AI; one folder per packet |
+| 2.7 | Manual photo import, both AIs on every page, fx-CG50 calculator pictures |
 
 ---
 

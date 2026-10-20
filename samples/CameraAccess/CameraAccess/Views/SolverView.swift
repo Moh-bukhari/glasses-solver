@@ -40,16 +40,18 @@ enum SolverKeychain {
       claudeModel: defaults.string(forKey: "claudeModel") ?? SolverConfiguration.claudeDefault,
       fastTiers: defaults.object(forKey: "fastProcessing") as? Bool ?? true)
   }
-  /// One provider at a time is fastest. Claude Opus 5.5 reads printed values best, so Claude when its key exists.
+  /// With both keys, both providers solve every page and Claude Opus 5.5 reconciles (2.7: best answer, cost no object).
+  /// With one key, that provider.
   static func defaultMode() -> SolverMode {
-    !read(.claude).isEmpty ? .claude : .openAI
+    let claude = !read(.claude).isEmpty, openAI = !read(.openAI).isEmpty
+    return claude && openAI ? .both : claude ? .claude : .openAI
   }
   /// 2.0 moves the old defaults to GPT-6.1 Sol / Claude Opus 5.5 and single-provider solving.
   /// Custom model IDs are kept; cross-check mode can be chosen again in Settings.
   static func migrateDefaults() {
     let defaults = UserDefaults.standard
     let version = defaults.integer(forKey: "settingsVersion")
-    guard version < 6 else { return }
+    guard version < 7 else { return }
     if version < 2 {
       if defaults.string(forKey: "solverModel") == "gpt-5.4" { defaults.set(SolverConfiguration.openAIDefault, forKey: "solverModel") }
       if defaults.string(forKey: "claudeModel") == "claude-sonnet-5-5" { defaults.set(SolverConfiguration.claudeDefault, forKey: "claudeModel") }
@@ -75,9 +77,13 @@ enum SolverKeychain {
         defaults.set(SolverMode.claude.rawValue, forKey: "solverMode")
       }
     }
-    // 2.6: the glasses' video is too blurry for small print, so pages are photographed with the capture button.
-    defaults.set(AutoScanModel.CaptureMode.buttonPhotos.rawValue, forKey: "captureMode")
-    defaults.set(6, forKey: "settingsVersion")
+    if version < 6 {
+      // 2.6: the glasses' video is too blurry for small print, so pages are photographed with the capture button.
+      defaults.set(AutoScanModel.CaptureMode.buttonPhotos.rawValue, forKey: "captureMode")
+    }
+    // 2.7: the user asked for both APIs on every page, for the best solutions.
+    if !read(.claude).isEmpty && !read(.openAI).isEmpty { defaults.set(SolverMode.both.rawValue, forKey: "solverMode") }
+    defaults.set(7, forKey: "settingsVersion")
   }
 }
 
@@ -112,7 +118,7 @@ struct SolverSettingsView: View {
             ForEach(SolverMode.allCases) { Text($0.name).tag($0) }
           }
           Text(mode == .both
-            ? "Both APIs solve every page independently, then OpenAI reconciles the two answers against your photo. More careful, but each page takes an extra round and costs more."
+            ? "Claude Opus 5.5 and GPT-6 Astra each solve every page, then Claude checks both against your photo and writes the final answer. The most accurate; each page takes an extra round and costs more."
             : "Claude Opus 5.5 reads printed numbers most accurately; GPT-6 Astra is OpenAI's best. One request per page, with worked steps and its own check.").font(.footnote)
           Toggle("Fast processing", isOn: $fastProcessing)
           Text(fastProcessing
@@ -178,6 +184,7 @@ struct SolverSettingsView: View {
         Button("Save settings") {
           do {
             let addedClaude = SolverKeychain.read(.claude).isEmpty && !claudeKey.trimmed.isEmpty
+            let addedOpenAI = SolverKeychain.read(.openAI).isEmpty && !key.trimmed.isEmpty
             try SolverKeychain.save(key.trimmed, provider: .openAI)
             try SolverKeychain.save(claudeKey.trimmed, provider: .claude)
             let defaults = UserDefaults.standard
@@ -185,6 +192,11 @@ struct SolverSettingsView: View {
             var mode = self.mode
             if mode == .openAI && (key.trimmed.isEmpty || addedClaude) && !claudeKey.trimmed.isEmpty { mode = .claude }
             if mode == .claude && claudeKey.trimmed.isEmpty && !key.trimmed.isEmpty { mode = .openAI }
+            // Both providers whenever both keys are saved and one was just added; never Both with a key missing.
+            if !key.trimmed.isEmpty && !claudeKey.trimmed.isEmpty && (addedClaude || addedOpenAI) { mode = .both }
+            if mode == .both && (key.trimmed.isEmpty || claudeKey.trimmed.isEmpty) {
+              mode = claudeKey.trimmed.isEmpty ? .openAI : .claude
+            }
             defaults.set(mode.rawValue, forKey: "solverMode"); defaults.set(model.trimmed, forKey: "solverModel")
             defaults.set(claudeModel.trimmed, forKey: "claudeModel"); dismiss()
           } catch { self.error = error.localizedDescription }

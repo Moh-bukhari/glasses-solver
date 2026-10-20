@@ -11,6 +11,8 @@ struct AutoScanView: View {
   @State private var model = AutoScanModel.shared
   @State private var settings = false
   @State private var selection: PhotosPickerItem?
+  /// Manual import: the question photos picked, in the order picked.
+  @State private var selections: [PhotosPickerItem] = []
   @State private var importError: String?
   @State private var replacingPhoto: Int?
   @State private var confirmNewBatch = false
@@ -30,7 +32,9 @@ struct AutoScanView: View {
     NavigationStack {
       ScrollView {
         VStack(alignment: .leading, spacing: 18) {
-          Text("One button. Every page. One PDF.").font(.title2.bold())
+          Text("Pick your photos. Get every solution.").font(.title2.bold())
+          Text("Choose the clearest photo of each page of questions, in order. Claude and OpenAI both solve every page and Claude reconciles them into one answer. You get a PDF and fx-CG50 pictures of every solution, in one folder ready to copy to the calculator.")
+            .foregroundStyle(.secondary)
           Text(buttonPhotos
             ? "Tap Start, then take photos of page 1 with the capture button on your glasses. Each photo is checked as it arrives: you hear \"Page 1 is clear. Take page 2.\", or what to photograph again. Pages are solved as you go; a photo of a thumbs-up finishes, and one folder in Files holds the PDF and every photo."
             : "Tap Start, or run the Start Glasses Scan shortcut, and look closely at each part of a page, top to bottom. Each page is checked before you move on: you hear \"Page 1 is clear\", or what to show again. 👍 solves every page, 👉 keeps a page as it is, 👈 previous page.")
@@ -88,6 +92,19 @@ struct AutoScanView: View {
       .confirmationDialog("Clear the saved pages and start a new packet? Existing PDFs are kept.", isPresented: $confirmNewBatch, titleVisibility: .visible) {
         Button("Start new packet", role: .destructive) { model.newBatch() }
       }
+      .task(id: selections) {
+        guard !selections.isEmpty else { return }
+        let items = selections
+        defer { selections = [] }
+        importError = nil
+        var photos: [Data] = []
+        for item in items {
+          if let data = try? await item.loadTransferable(type: Data.self) { photos.append(data) }
+        }
+        guard !Task.isCancelled else { return }
+        if photos.count < items.count { importError = "\(items.count - photos.count) photo(s) could not be loaded." }
+        applySettings(); model.importPhotos(photos)
+      }
       .task(id: selection) {
         guard let selection else { return }
         defer { self.selection = nil; replacingPhoto = nil }
@@ -127,7 +144,7 @@ struct AutoScanView: View {
         if model.needsKey { settings = true }
       } label: {
         let count = model.pages.count + (model.hasOpenPhotos ? 1 : 0)
-        Label("Done · Solve \(count) page\(count == 1 ? "" : "s")", systemImage: "hand.thumbsup.fill")
+        Label("Solve \(count) page\(count == 1 ? "" : "s")", systemImage: "sparkles")
           .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
       }.buttonStyle(.borderedProminent).accessibilityIdentifier("finish_scanning")
     }
@@ -143,6 +160,14 @@ struct AutoScanView: View {
           .buttonStyle(.bordered)
       }
     } else {
+      if model.pages.count < AutoScanModel.maxPages {
+        PhotosPicker(selection: $selections, maxSelectionCount: AutoScanModel.maxPages - model.pages.count,
+                     selectionBehavior: .ordered, matching: .images) {
+          Label(model.pages.isEmpty || model.packetSolved ? "Choose question photos" : "Add more photos",
+                systemImage: "photo.on.rectangle.angled")
+            .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)
+        }.buttonStyle(.borderedProminent).accessibilityIdentifier("import_photos")
+      }
       if !importOnly && model.pages.count < AutoScanModel.maxPages {
         // Glasses photos come through Meta AI's import, so they need no camera connection to the app.
         if !buttonPhotos, let wearablesVM, wearablesVM.registrationState != .registered {
@@ -151,14 +176,11 @@ struct AutoScanView: View {
           Button {
             applySettings(); model.start()
           } label: {
-            Label(model.pages.isEmpty ? "Start scanning" : (model.packetSolved ? "Start a new packet" : "Continue scanning"), systemImage: "viewfinder")
-              .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)
-          }.buttonStyle(.borderedProminent).accessibilityIdentifier("start_auto_scan")
+            Label(model.pages.isEmpty ? "Scan with glasses instead" : (model.packetSolved ? "New packet with glasses" : "Continue with glasses"),
+                  systemImage: "eyeglasses")
+              .frame(maxWidth: .infinity).padding(.vertical, 6)
+          }.buttonStyle(.bordered).accessibilityIdentifier("start_auto_scan")
         }
-      }
-      if model.pages.count < AutoScanModel.maxPages {
-        PhotosPicker(selection: $selection, matching: .images) { Label("Add a paper photo", systemImage: "photo") }
-          .simultaneousGesture(TapGesture().onEnded { replacingPhoto = nil }).buttonStyle(.bordered)
       }
       if model.result != nil {
         Button("Open solution PDF") { model.showPDF = true }.buttonStyle(.borderedProminent)

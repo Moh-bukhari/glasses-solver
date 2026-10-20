@@ -292,6 +292,44 @@ final class AutoScanModel {
     }
   }
 
+  /// Manual import (2.7): the photos the user picked, in the order picked, each become a page. Photos are only normalized
+  /// (orientation, JPEG); the user chose the clearest ones, so no on-device quality gate can reject them. Pages are solved
+  /// when the user taps Solve.
+  func importPhotos(_ photos: [Data]) {
+    guard !isRunning, !photos.isEmpty else { return }
+    if packetSolved { clearPacket() }
+    let room = Self.maxPages - pages.count
+    guard room > 0 else { guide = "\(Self.maxPages) pages saved. Solve or start a new packet first."; return }
+    begin(imported: true); replacing = nil; handsFree = false; fixing = false; photoScan = false
+    refreshSolveSetup()
+    let chosen = Array(photos.prefix(room)), id = runID, analyzer = self.analyzer
+    phase = .checking; progress = 0; guide = "Adding \(chosen.count) photo\(chosen.count == 1 ? "" : "s")…"
+    worker = Task { [weak self] in
+      var added = 0, failed = 0
+      for data in chosen {
+        guard let self, self.runID == id else { return }
+        do {
+          let photo = try await analyzer.prepare(data)
+          guard self.runID == id else { return }
+          self.pages = try self.draft.add(frames: [photo.jpeg], to: self.pages, replacing: nil)
+          if let thumbnail = photo.thumbnail, let page = self.pages.last { self.thumbnails[page.id] = UIImage(cgImage: thumbnail) }
+          added += 1
+        } catch { failed += 1 }
+        self.progress = Double(added + failed) / Double(chosen.count)
+      }
+      guard let self, self.runID == id else { return }
+      self.packetSolved = false; self.lastSaved = self.pages.count - 1
+      self.syncJobs()
+      let solver = self.solver, urls = Set(self.pages.flatMap(\.frames))
+      Task { await solver.forget(keeping: urls) }
+      self.phase = .idle; self.restoreIdleTimer(); self.progress = 0
+      var message = "\(self.pages.count) page\(self.pages.count == 1 ? "" : "s") ready. Tap Solve, or add more photos."
+      if failed > 0 { message = "\(failed) photo\(failed == 1 ? "" : "s") could not be read and \(failed == 1 ? "was" : "were") skipped. " + message }
+      if photos.count > chosen.count { message += " Only the first \(chosen.count) were added (limit \(Self.maxPages) pages)." }
+      self.guide = message
+    }
+  }
+
   /// Voice commands (if on) and the audio route, before a scan's first direction.
   private func prepareVoice(id: UUID) async throws {
     if voiceCommands {

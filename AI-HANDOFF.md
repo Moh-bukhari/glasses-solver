@@ -8,7 +8,7 @@ Start here when continuing this project. This file records the product intent, c
 
 | Item | Where / purpose |
 | --- | --- |
-| Active app branch | 2.1 (and 2.0) are on [`claude/pensive-allen-ggkllj`](https://github.com/Moh-bukhari/glasses-solver/tree/claude/pensive-allen-ggkllj). 1.3.1 and earlier are on [`solver-app`](https://github.com/Moh-bukhari/glasses-solver/tree/solver-app). Merge or retarget as the user decides. |
+| Active app branch | All 2.x work (2.0 to 2.7) is on [`claude/pensive-allen-ggkllj`](https://github.com/Moh-bukhari/glasses-solver/tree/claude/pensive-allen-ggkllj). 1.3.1 and earlier are on [`solver-app`](https://github.com/Moh-bukhari/glasses-solver/tree/solver-app). Merge or retarget as the user decides. [README.md](README.md) is the short overview. |
 | Default GitHub branch | `main`. It holds the upstream Meta sample baseline and pointers to this guide. |
 | Earlier draft PR | [Moh-bukhari/glasses-solver#1](https://github.com/Moh-bukhari/glasses-solver/pull/1). Check its current state before continuing. |
 | User installation and operation | [SOLVER-SETUP.md](SOLVER-SETUP.md) |
