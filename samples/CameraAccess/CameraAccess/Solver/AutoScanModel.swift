@@ -53,7 +53,11 @@ final class AutoScanModel {
   /// Glasses photos: the page being photographed, and photos of a later sheet taken before that page was clear.
   private var openPhotos: [PagePhoto] = []
   private var laterPhotos: [PagePhoto] = []
-  var hasOpenPhotos: Bool { !openPhotos.isEmpty || !laterPhotos.isEmpty || !photoEvents.isEmpty || !intake.isEmpty }
+  /// Photos taken before a retake began: they are not the retake, and continue as new pages once it is saved.
+  private var heldPhotos: [PagePhoto] = []
+  var hasOpenPhotos: Bool {
+    !openPhotos.isEmpty || !laterPhotos.isEmpty || !heldPhotos.isEmpty || !photoEvents.isEmpty || !intake.isEmpty
+  }
   var isRunning: Bool { [.connecting, .seeking, .awaitingNext, .capturing, .checking, .solving, .saving].contains(phase) }
   var isCollecting: Bool { [.seeking, .awaitingNext, .capturing, .checking].contains(phase) }
   var canFinish: Bool {
@@ -190,6 +194,12 @@ final class AutoScanModel {
   @ObservationIgnored private var lastPhotoTaken: Date?
   /// The app is in the background (the wearer may be in Meta AI): no idle finish until it is back.
   @ObservationIgnored private var photosAway = false
+  /// When the open retake began (the 👈 photo's time, or the tap), and when a page was last saved: a 👈 photo applies
+  /// to the pages as they were when it was taken.
+  @ObservationIgnored private var retakeFrom: Date?
+  @ObservationIgnored private var lastPageSavedAt: Date?
+  /// When the 👍 photo of a pending finish was taken: photos taken after it are not part of this packet.
+  @ObservationIgnored private var finishCutoff: Date?
   @ObservationIgnored private var photoStart = 0.0
   @ObservationIgnored private var photoHintGiven = false
   /// Checks of the open page so far, and whether the wearer heard that a photo shows the page before again.
@@ -202,7 +212,7 @@ final class AutoScanModel {
   /// After this long without a new photo, the pages taken so far are solved.
   static let photoIdleFinish: TimeInterval = 600
   private struct PagePhoto: Sendable { let id: String; let jpeg: Data; let taken: Date }
-  private enum PhotoEvent { case photo(PagePhoto), command(ScanCommand) }
+  private enum PhotoEvent { case photo(PagePhoto), command(ScanCommand, taken: Date) }
 
   init(camera: any ScanCamera, analyzer: any PageAnalyzing = PageAnalyzer(),
        solver: any PageSolving = PageSolver(), checker: any PageChecking = PageChecker(), saver: any SolutionSaving = SolutionStore(),
@@ -212,6 +222,11 @@ final class AutoScanModel {
     self.draft = draft; self.voice = voice; self.photos = photos; self.configurationProvider = configurationProvider
     pages = draft.load()
     packetSolved = !pages.isEmpty && draft.isSolved
+    if let state = draft.loadPhotoState() {
+      // A relaunch continues a glasses-photo packet where it stopped, without reusing photos already on its pages.
+      usedPhotos = Set(state.used)
+      if !packetSolved { photosResumeFrom = state.resumeFrom }
+    }
     loadThumbnails()
     if packetSolved { guide = "Your last packet is solved. Tap Start for a new packet, or retake a page to fix it." }
     else if !pages.isEmpty { guide = "Restored \(pages.count) saved pages. Continue scanning, or finish to solve them." }
@@ -233,6 +248,7 @@ final class AutoScanModel {
     camera.onCommand = { [weak self] command in self?.handle(command) }
     voice.onCommand = { [weak self] command in self?.handle(command) }
     voice.onStatus = { [weak self] message in self?.voiceStatus = message }
+    photos.onIdle = { [weak self] in self?.pumpPhotos() } // a finish may be waiting for the library
   }
 
   // MARK: Scanning
@@ -343,7 +359,8 @@ final class AutoScanModel {
 
   /// 👈 retakes the page just photographed; each further 👈 steps one more page back.
   /// The old photo stays until the new one is clear.
-  func previousPage() {
+  /// `taken`: the 👈 photo's time. If a page was saved after it was taken, "the page before" is the one before that page.
+  func previousPage(asOf taken: Date? = nil) {
     guard !pages.isEmpty, [.seeking, .awaitingNext].contains(phase) else { return }
     let target: Int, inView: Bool
     if phase == .seeking, let replacing {
@@ -352,9 +369,16 @@ final class AutoScanModel {
       // Just photographed and no page turn seen yet: still in front of the wearer, unless they were sent elsewhere.
       target = lastSaved; inView = !holdForNext
     } else {
-      target = pages.count - 1; inView = false
+      let savedSince = taken.map { (lastPageSavedAt ?? .distantPast) > $0 } ?? false
+      target = pages.count - (savedSince ? 2 : 1); inView = false
     }
     guard target >= 0 else { guide = "This is page 1. Show it again."; say("This is page 1."); return }
+    if photoScan {
+      // The page being photographed continues once the retake is saved. Queued photos taken before the retake began
+      // are held the same way when they come up (`takeQueuedPhotos`).
+      heldPhotos = (heldPhotos + openPhotos + laterPhotos).sorted { $0.taken < $1.taken }
+      retakeFrom = taken ?? Date()
+    }
     retake(page: target, inView: inView)
     guide = "Retaking page \(target + 1). " + (inView ? "Hold it steady." : "Turn back to it.")
     say(inView ? "Retaking page \(target + 1)." : "Page \(target + 1). Turn back to it.")
@@ -457,6 +481,7 @@ final class AutoScanModel {
     camera.stop(); stopPhotos(); voice.stopCommands(); voice.stopSpeaking()
     gate.reset(); turnGate.reset(); speechGate.reset(); gestureGate.reset()
     self.imported = imported; replacing = nil; finishRequested = false; forceCapture = false; captureFailures = 0
+    finishCutoff = nil; retakeFrom = nil
     holdForNext = false; armAfterTurn = false; armGate.reset(); armDeadline = .infinity; recentViews = []; noteActivity()
     discardOpenPage(); savedPageWords = []; stillSpoken = false
     result = nil; showPDF = false; progress = 0; attempts = 0; solveStatus = ""
@@ -973,7 +998,10 @@ final class AutoScanModel {
     photoStatus = "Waiting for the first photo from Meta AI…"
     // Continue where this packet's last scan stopped (at most 10 minutes back), allowing a small clock difference.
     let now = Date()
-    let start = max(min(photosResumeFrom ?? now, now), now.addingTimeInterval(-600))
+    // Retaking a page of a finished packet: older photos are not part of it.
+    let resume = index != nil && packetSolved ? now : photosResumeFrom ?? now
+    let start = max(min(resume, now), now.addingTimeInterval(-600))
+    retakeFrom = index != nil ? now : nil
     let since = start.addingTimeInterval(-ButtonPhotos.lookback)
     photoRunStart = start; lastPhotoTaken = nil
     let id = runID
@@ -982,6 +1010,7 @@ final class AutoScanModel {
       guard let self else { return }
       do {
         try await prepareVoice(id: id)
+        watchingPhotos = true // photos can arrive before `start` returns
         try await photos.start(since: since) { [weak self] photo in self?.receivePhoto(photo, run: id) }
         try Task.checkCancellation(); guard runID == id else { return }
       } catch {
@@ -989,7 +1018,7 @@ final class AutoScanModel {
         needsPhotoAccess = error is PhotoSourceError
         fail(error.localizedDescription); return
       }
-      watchingPhotos = true; photosResumeFrom = nil
+      photosResumeFrom = nil
       phase = .seeking; noteActivity(); photoStart = ProcessInfo.processInfo.systemUptime
       startPhotoTimer(run: id)
       let number = openNumber
@@ -1013,7 +1042,8 @@ final class AutoScanModel {
     lastPhotoTaken = max(lastPhotoTaken ?? photo.taken, photo.taken)
     let delay = max(0, Int(photo.arrived.timeIntervalSince(photo.taken).rounded()))
     photoStatus = "\(photosReceived) photo\(photosReceived == 1 ? "" : "s") received. The last one reached the phone \(delay) s after it was taken."
-    intake.append(photo); drainIntake(run: run)
+    intake.append(photo); persistPhotoState() // pending, so a relaunch looks back for it rather than skipping it
+    drainIntake(run: run)
   }
 
   /// Looks at each photo, in order, for a hand command held up to the glasses before it joins a page, so a command
@@ -1029,7 +1059,7 @@ final class AutoScanModel {
         guard self.runID == run else { return } // still in `intake`, so a stopped scan releases it
         self.intake.removeFirst()
         if let thumbnail { self.preview = thumbnail }
-        self.photoEvents.append(gesture.map { .command(Self.command(for: $0)) }
+        self.photoEvents.append(gesture.map { .command(Self.command(for: $0), taken: photo.taken) }
           ?? .photo(PagePhoto(id: photo.id, jpeg: jpeg, taken: photo.taken)))
         self.pumpPhotos()
       }
@@ -1044,18 +1074,51 @@ final class AutoScanModel {
     case .thumbsLeft, .thumbsDown: return .previous
     }
   }
-  private var photoBusy: Bool { photoCheck != nil || !photoEvents.isEmpty || !intake.isEmpty || intakeTask != nil }
+  /// Photos still on their way: in a check, queued, being looked at, or being read from the library.
+  private var photoBusy: Bool {
+    photoCheck != nil || !photoEvents.isEmpty || !intake.isEmpty || intakeTask != nil || photos.isDelivering
+  }
+  private var photosWaiting: Bool {
+    !intake.isEmpty || photoEvents.contains { if case .photo = $0 { return true }; return false }
+  }
+
+  /// The page photos queued next (up to the first command). During a retake, photos taken before it began are held for
+  /// the pages after it; during a 👍 finish, photos taken after the 👍 photo are left for the next packet.
+  private func takeQueuedPhotos() -> [PagePhoto] {
+    var batch: [PagePhoto] = []
+    while case .photo(let photo)? = photoEvents.first { photoEvents.removeFirst(); batch.append(photo) }
+    if finishRequested, let cutoff = finishCutoff {
+      let after = batch.filter { $0.taken > cutoff }
+      for photo in after { usedPhotos.remove(photo.id) }
+      batch.removeAll { $0.taken > cutoff }
+    }
+    if replacing != nil, let from = retakeFrom {
+      heldPhotos += batch.filter { $0.taken < from }
+      batch.removeAll { $0.taken < from }
+    }
+    return batch
+  }
+  /// A queued 👍 photo finishes with the photos taken before it; 👈 retakes the page before, as of when it was taken.
+  private func photoCommand(_ command: ScanCommand, taken: Date) {
+    switch command {
+    case .finish: noteActivity(); finishCutoff = taken; finishScanning()
+    case .previous: noteActivity(); previousPage(asOf: taken)
+    case .next, .cancel: handle(command)
+    }
+  }
+  /// The wearer is told what to do instead of finishing.
+  private func cancelFinish() { finishRequested = false; finishCutoff = nil }
 
   /// Moves the photos taken next into the open page and checks it: one check at a time, in the order photos were taken,
   /// so a command photo (👍 solve, 👉 keep the page, 👈 retake the page before) applies after the photos before it.
   private func pumpPhotos() {
     guard photoScan, phase == .seeking, photoCheck == nil else { return }
-    if case .command(let command)? = photoEvents.first {
-      photoEvents.removeFirst(); handle(command); pumpPhotos(); return
+    if case .command(let command, let taken)? = photoEvents.first {
+      photoEvents.removeFirst(); photoCommand(command, taken: taken); pumpPhotos(); return
     }
-    var batch: [PagePhoto] = []
-    while case .photo(let photo)? = photoEvents.first { photoEvents.removeFirst(); batch.append(photo) }
+    let batch = takeQueuedPhotos()
     guard !batch.isEmpty else {
+      if !photoEvents.isEmpty { pumpPhotos(); return } // a command follows the photos held or left out
       if finishRequested && !photoBusy { finishScanning() }
       return
     }
@@ -1136,9 +1199,11 @@ final class AutoScanModel {
       }
       let advice = verdict.say
       let message: String
-      if finishRequested {
-        finishRequested = false; finishAnyway = true
+      if finishRequested && !photosWaiting {
+        cancelFinish(); finishAnyway = true
         message = "Page \(number): \(advice) Or a thumbs-up photo solves anyway."
+      } else if finishRequested {
+        message = "Page \(number): \(advice)" // photos already taken may still make it clear before finishing
       } else if verdict.notShownYet && laterPhotos.isEmpty {
         message = "Page \(number): \(advice)" // the wearer may still be photographing the sheet
       } else {
@@ -1206,6 +1271,7 @@ final class AutoScanModel {
   /// 👉 (a thumbs-right photo, the phone or a voice command): the open page is saved as it is, checked or not.
   private func keepPhotoPage() {
     guard phase == .seeking else { return }
+    openPhotos += takeQueuedPhotos() // photos already taken of this page belong to it
     guard !openPhotos.isEmpty else {
       let message = "Take a photo of page \(openNumber) first."
       guide = message; say(message); return
@@ -1215,8 +1281,10 @@ final class AutoScanModel {
 
   /// A page is saved: say so, and go on with any photos already taken after it.
   private func photoPageSaved(_ index: Int, checked: Bool) {
-    phase = .seeking; progress = 0
-    if !laterPhotos.isEmpty { photoEvents.insert(contentsOf: laterPhotos.map { .photo($0) }, at: 0); laterPhotos = [] }
+    phase = .seeking; progress = 0; lastPageSavedAt = Date(); retakeFrom = nil
+    let waiting = (heldPhotos + laterPhotos).sorted { $0.taken < $1.taken }
+    if !waiting.isEmpty { photoEvents.insert(contentsOf: waiting.map { .photo($0) }, at: 0); heldPhotos = []; laterPhotos = [] }
+    persistPhotoState()
     let done = "\(pageName(index)) \(checked ? "is clear" : "saved")."
     if finishRequested || !photoEvents.isEmpty || pages.count >= Self.maxPages {
       guide = done; say(done) // photos of the next page are already here, or the scan is finishing
@@ -1237,19 +1305,22 @@ final class AutoScanModel {
     }
     if !openPhotos.isEmpty {
       if checksActive && !finishAnyway && !lastRetake.isEmpty {
-        finishAnyway = true; finishRequested = false
+        finishAnyway = true; cancelFinish()
         let message = "Page \(openNumber) still isn't clear: \(lastRetake) Or a thumbs-up photo solves anyway."
         guide = message; say(message); return false
       }
       finishRequested = true; commitPhotoPage(checked: false); return false
     }
-    if !laterPhotos.isEmpty {
-      photoEvents = laterPhotos.map { .photo($0) }; laterPhotos = []
+    if !laterPhotos.isEmpty || !heldPhotos.isEmpty {
+      // An unfinished retake is dropped; photos taken before it become pages.
+      replacing = nil; retakeFrom = nil
+      photoEvents = (heldPhotos + laterPhotos).sorted { $0.taken < $1.taken }.map { .photo($0) }
+      heldPhotos = []; laterPhotos = []
       finishRequested = true; pumpPhotos(); return false
     }
     guard !pages.isEmpty else {
       // Every photo so far was unreadable or of a page already done.
-      finishRequested = false
+      cancelFinish()
       guide = "No page is saved yet. Take a photo of page 1."; say(guide); return false
     }
     return true
@@ -1259,19 +1330,37 @@ final class AutoScanModel {
   private func stopPhotos() {
     photos.stop()
     if watchingPhotos {
-      let pending: [(id: String, taken: Date)] = intake.map { ($0.id, $0.taken) }
-        + photoEvents.compactMap { event in
-          if case .photo(let photo) = event { return (photo.id, photo.taken) }
-          return nil
-        }
-        + (openPhotos + laterPhotos).map { ($0.id, $0.taken) }
+      let pending = pendingPhotos()
       for photo in pending { usedPhotos.remove(photo.id) }
-      photosResumeFrom = min(pending.map(\.taken).min() ?? lastPhotoTaken ?? photoRunStart ?? Date(), Date())
+      photosResumeFrom = resumePoint(pending)
     }
     watchingPhotos = false
     intakeTask?.cancel(); intakeTask = nil; intake = []; photoEvents = []
     photoCheck?.cancel(); photoCheck = nil; photoTimer?.cancel(); photoTimer = nil
-    openPhotos = []; laterPhotos = []
+    openPhotos = []; laterPhotos = []; heldPhotos = []
+    if photoScan { persistPhotoState() }
+  }
+
+  /// Photos received but not on a saved page yet.
+  private func pendingPhotos() -> [(id: String, taken: Date)] {
+    intake.map { ($0.id, $0.taken) }
+      + photoEvents.compactMap { event in
+        if case .photo(let photo) = event { return (photo.id, photo.taken) }
+        return nil
+      }
+      + (openPhotos + laterPhotos + heldPhotos).map { ($0.id, $0.taken) }
+  }
+  /// Where a continued scan looks back from: the oldest photo not yet on a page, else the newest photo received, else
+  /// when this scan started.
+  private func resumePoint(_ pending: [(id: String, taken: Date)]) -> Date {
+    min(pending.map(\.taken).min() ?? lastPhotoTaken ?? photoRunStart ?? Date(), Date())
+  }
+  /// Kept with the draft, so a scan continued after iOS ended the app finds photos taken meanwhile and skips used ones.
+  private func persistPhotoState() {
+    let pending = watchingPhotos ? pendingPhotos() : []
+    let resume = watchingPhotos ? resumePoint(pending) : photosResumeFrom
+    let used = usedPhotos.subtracting(pending.map(\.id))
+    try? draft.savePhotoState(PhotoScanState(resumeFrom: resume, used: used.sorted()))
   }
 
   private func startPhotoTimer(run: UUID) {
@@ -1293,8 +1382,9 @@ final class AutoScanModel {
       say("No photos yet. Open Meta AI on your phone to import them.")
     }
     guard phase == .seeking, !photoBusy, !photosAway, now - lastActivity >= Self.photoIdleFinish else { return }
-    guard !pages.isEmpty || !openPhotos.isEmpty || !laterPhotos.isEmpty else {
-      pauseScanning("Paused after 10 minutes without a photo."); say("Scanning paused."); return
+    guard !packetSolved, !pages.isEmpty || !openPhotos.isEmpty || !laterPhotos.isEmpty || !heldPhotos.isEmpty else {
+      pauseScanning(packetSolved ? "Paused: no page was retaken, so your PDF is unchanged." : "Paused after 10 minutes without a photo.")
+      say("Scanning paused."); return
     }
     noteActivity(); say("No new photos for 10 minutes. Solving.")
     finishAnyway = true; finishScanning()
@@ -1325,7 +1415,13 @@ final class AutoScanModel {
       Task { [weak self] in await self?.commitPage(id: run) }
       return
     }
-    guard canFinish else { return }
+    guard canFinish else {
+      if photoScan && isCollecting && packetSolved {
+        // A retake of a finished packet that saved nothing: the PDF stays as it is.
+        cancelFinish(); pauseScanning("No page was retaken, so your PDF is unchanged."); say(guide)
+      }
+      return
+    }
     let configuration = configurationProvider()
     do { try configuration.validate(); needsKey = false }
     catch {
@@ -1555,7 +1651,8 @@ final class AutoScanModel {
       guard let self else { return }
       do {
         let solution = try PagePlan.combine(entries, providers: providers)
-        let saved = try await saver.save(page: solution, sources: sources, names: names)
+        // A packet solved again after a retake replaces its earlier folder: one folder per packet.
+        let saved = try await saver.save(page: solution, sources: sources, names: names, replacing: draft.savedFolder)
         try Task.checkCancellation(); guard runID == id else { return }
         result = saved; phase = .finished
         let review = solution.problems.contains { $0.reviewNote?.hasPrefix("NEEDS REVIEW") == true }
@@ -1565,6 +1662,7 @@ final class AutoScanModel {
         // Keep the pages and cached answers so one page can be retaken and the PDF rebuilt quickly.
         // The next Start (or a new photo) begins a fresh packet; the PDF folder holds every original.
         try? draft.markSolved(); packetSolved = true
+        try? draft.rememberFolder(saved.pdf.deletingLastPathComponent().lastPathComponent)
         restoreIdleTimer(); endBackgroundWork(); showPDF = true
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         say("Your solution PDF is ready on your phone.")

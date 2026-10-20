@@ -30,11 +30,29 @@ struct ScanDraftStore {
   }
   private var manifest: URL { directory.appendingPathComponent("pages.json") }
   private var solvedMarker: URL { directory.appendingPathComponent("solved") }
+  private var photoState: URL { directory.appendingPathComponent("photos.json") }
+  private var folderRecord: URL { directory.appendingPathComponent("folder.txt") }
   /// Readable after the first unlock, so solving and the PDF can finish if the phone locks meanwhile.
   static let protection: Data.WritingOptions = .completeFileProtectionUntilFirstUserAuthentication
   /// The draft is the source of a finished PDF until the next packet starts or a page is edited.
   var isSolved: Bool { FileManager.default.fileExists(atPath: solvedMarker.path) }
   func markSolved() throws { try Data().write(to: solvedMarker, options: [.atomic, Self.protection]) }
+  /// The Solutions folder this packet was last saved to; solving it again after a retake replaces that folder.
+  var savedFolder: String? {
+    (try? String(contentsOf: folderRecord, encoding: .utf8)).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .flatMap { $0.isEmpty ? nil : $0 }
+  }
+  func rememberFolder(_ name: String) throws {
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try Data(name.utf8).write(to: folderRecord, options: [.atomic, Self.protection])
+  }
+  func loadPhotoState() -> PhotoScanState? {
+    (try? Data(contentsOf: photoState)).flatMap { try? JSONDecoder().decode(PhotoScanState.self, from: $0) }
+  }
+  func savePhotoState(_ state: PhotoScanState) throws {
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try JSONEncoder().encode(state).write(to: photoState, options: [.atomic, Self.protection])
+  }
   /// Frame 1 is `<id>.jpg` (the only file of a single-photo page, as in 1.x/2.0 drafts); later frames are `<id>-2.jpg`, `<id>-3.jpg`, …
   private func frameURL(_ id: UUID, _ index: Int) -> URL {
     directory.appendingPathComponent(index == 0 ? "\(id).jpg" : "\(id)-\(index + 1).jpg")

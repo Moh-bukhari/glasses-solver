@@ -30,6 +30,7 @@ The glasses' video is too blurry for small print, but the photos you take with t
    - 👉 **thumb to your right**: keep this page as it is and go on.
    - 👈 **thumb to your left**: retake the page before.
    The phone has the same buttons (**Done · Solve**, **Keep this page as it is**), and there is a **Finish Glasses Scan** shortcut for Siri or the Action button.
+   Prefer the thumbs-up photo to finish: it reaches the phone after your last page photos, so they are always included. Done and the shortcut finish with the photos that have reached the phone (the screen shows how many). Photos you take after the thumbs-up are left for your next packet.
 6. The PDF opens on the phone. It is saved with every photo in **Files › On My iPhone › Glasses Solver › Solutions › <date, time and title>**: `Solutions.pdf`, `Page 1.jpg`, `Page 2 (1).jpg`, `Page 2 (2).jpg`, …
 
 Keep the phone unlocked with Glasses Solver open while you scan (the screen stays on). If no photo arrives after a minute, open Meta AI's gallery once so it imports, then come back to Glasses Solver. After 10 minutes without a new photo, the pages you took are solved.

@@ -28,6 +28,8 @@ struct FinishScanIntent: AppIntent {
 
   @MainActor
   func perform() async throws -> some IntentResult {
+    // Coming from another app: look for photos imported meanwhile first, so the finish waits for them.
+    AutoScanModel.shared.foregrounded()
     AutoScanModel.shared.handle(.finish)
     return .result()
   }

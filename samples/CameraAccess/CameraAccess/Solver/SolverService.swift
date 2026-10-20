@@ -34,7 +34,8 @@ struct SavedSolution: Identifiable {
 protocol SolutionSaving {
   /// `sources` holds each packet page's photos in order; a page may have several close-up photos.
   /// `names` are the pages' names as the wearer heard them ("Question 3"), used to title the source photos.
-  func save(page: SolvedPage, sources: [[URL]], names: [String]) async throws -> SavedSolution
+  /// `replacing` is the folder this packet was saved to before: it is removed once the new one is complete.
+  func save(page: SolvedPage, sources: [[URL]], names: [String], replacing: String?) async throws -> SavedSolution
 }
 
 /// What the app remembers about a saved packet, kept hidden in its folder.
@@ -72,7 +73,7 @@ struct SolutionStore: SolutionSaving {
     try? files.removeItem(at: documents.appendingPathComponent("ScanDraft", isDirectory: true))
   }
 
-  func save(page: SolvedPage, sources pages: [[URL]], names pageNames: [String]) async throws -> SavedSolution {
+  func save(page: SolvedPage, sources pages: [[URL]], names pageNames: [String], replacing old: String?) async throws -> SavedSolution {
     Self.startFresh()
     let id = UUID(), date = Date()
     try FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
@@ -114,6 +115,9 @@ struct SolutionStore: SolutionSaving {
       }
       let stored = StoredSolution(id: id, date: date, firstPhoto: names[0], solution: page)
       try JSONEncoder().encode(stored).write(to: folder.appendingPathComponent(Self.record), options: .atomic)
+      if let old, old != folderName, !old.contains("/"), !old.hasPrefix(".") {
+        try? FileManager.default.removeItem(at: Self.directory.appendingPathComponent(old, isDirectory: true))
+      }
       return SavedSolution(id: id, title: page.title, date: date, pdf: pdf, source: folder.appendingPathComponent(names[0]))
     } catch {
       try? FileManager.default.removeItem(at: folder)

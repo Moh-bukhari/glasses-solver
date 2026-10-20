@@ -18,6 +18,8 @@ final class PhotoLibraryInbox: PhotoSource {
   private var again = false
   /// Bumped by every start and stop, so a lookup that outlives its scan delivers nothing.
   private var session = 0
+  var isDelivering: Bool { scan != nil }
+  var onIdle: (@MainActor () -> Void)?
 
   func start(since: Date, onPhoto: @escaping @MainActor (IncomingPhoto) -> Void) async throws {
     stop()
@@ -72,6 +74,7 @@ final class PhotoLibraryInbox: PhotoSource {
     } while again && self.session == session
     guard self.session == session else { return }
     scan = nil
+    onIdle?()
     if retry {
       Task { [weak self] in
         try? await Task.sleep(for: .seconds(2))

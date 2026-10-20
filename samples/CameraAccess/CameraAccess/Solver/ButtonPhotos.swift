@@ -40,6 +40,17 @@ protocol PhotoSource: AnyObject {
   func stop()
   /// Looks again for photos that arrived while the app was in the background.
   func catchUp()
+  /// A look through the library is running, so a photo may still be on its way to `onPhoto`.
+  var isDelivering: Bool { get }
+  /// Called when a look through the library ends.
+  var onIdle: (@MainActor () -> Void)? { get set }
+}
+
+/// What a glasses-photo scan needs to continue after iOS ends the app: where to look back from, and the photos already
+/// used (on saved pages, or in an earlier packet).
+struct PhotoScanState: Codable, Equatable, Sendable {
+  var resumeFrom: Date?
+  var used: [String]
 }
 
 /// Names in the Solutions folder: one folder per packet, readable and sorted by date in the Files app.
