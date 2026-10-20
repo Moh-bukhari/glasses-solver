@@ -145,7 +145,7 @@ struct SolutionStore: SolutionSaving {
   }
 
   /// A zip of a calculator folder for the share sheet (to a computer, cloud drive or the calculator drive).
-  nonisolated static func zip(_ folder: URL) throws -> URL {
+  nonisolated static func zipCalculatorFolder(_ folder: URL) throws -> URL {
     var result: URL?, failure: (any Error)?, coordination: NSError?
     NSFileCoordinator().coordinate(readingItemAt: folder, options: [.forUploading], error: &coordination) { zipped in
       do {

@@ -161,9 +161,10 @@ struct AutoScanView: View {
       }
     } else {
       if model.pages.count < AutoScanModel.maxPages {
+        let startsNew = model.pages.isEmpty || model.packetSolved
         PhotosPicker(selection: $selections, maxSelectionCount: AutoScanModel.maxPages - model.pages.count,
                      selectionBehavior: .ordered, matching: .images) {
-          Label(model.pages.isEmpty || model.packetSolved ? "Choose question photos" : "Add more photos",
+          Label(startsNew ? "Choose question photos" : "Add more photos",
                 systemImage: "photo.on.rectangle.angled")
             .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)
         }.buttonStyle(.borderedProminent).accessibilityIdentifier("import_photos")
@@ -383,7 +384,7 @@ struct SolutionViewer: View {
         }
         .task {
           guard let folder = solution.calculator else { return }
-          calculatorZip = try? await Task.detached(priority: .userInitiated) { try SolutionStore.zip(folder) }.value
+          calculatorZip = try? await Task.detached(priority: .userInitiated) { try SolutionStore.zipCalculatorFolder(folder) }.value
         }
     }
   }
