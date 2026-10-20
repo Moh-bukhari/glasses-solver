@@ -31,7 +31,7 @@ struct MainAppView: View {
           HomeScreenView(viewModel: viewModel)
         }
       }.tabItem { Label("Glasses", systemImage: "eyeglasses") }
-      SolutionHistoryView().tabItem { Label("PDFs", systemImage: "doc.richtext") }
+      SolutionHistoryView().tabItem { Label("Solutions", systemImage: "doc.richtext") }
     }
   }
 }

@@ -2,7 +2,7 @@ name: Build Glasses Solver IPA
 on:
   workflow_dispatch:
   push:
-    branches: [solver-app]
+    branches: [solver-app, "codex/**"]
     paths: ['samples/CameraAccess/**', '.github/workflows/build-solver.yml']
 permissions:
   contents: read
@@ -17,13 +17,15 @@ jobs:
       DEVELOPER_DIR: /Applications/Xcode_26.4.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
-      - name: Test automatic scan pipeline
+      - name: Test capture, Claude pipeline and calculator export
         run: |
           set -o pipefail
           xcodebuild test -project samples/CameraAccess/CameraAccess.xcodeproj \
             -scheme SolverTests -configuration Debug \
             -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.4.1' \
             -only-testing:CameraAccessTests/AutoScanTests \
+            -only-testing:CameraAccessTests/ClaudePipelineTests \
+            -only-testing:CameraAccessTests/CalculatorExportTests \
             -parallel-testing-enabled NO -resultBundlePath TestResults.xcresult \
             -test-timeouts-enabled YES -default-test-execution-time-allowance 90 \
             CODE_SIGN_IDENTITY="-" CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES \
@@ -43,6 +45,7 @@ jobs:
             TestResults.xcresult
             test-evidence
   build:
+    needs: verify
     runs-on: macos-26
     timeout-minutes: 15
     env:

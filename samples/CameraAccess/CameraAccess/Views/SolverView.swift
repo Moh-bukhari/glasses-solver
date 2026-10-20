@@ -33,24 +33,16 @@ enum SolverKeychain {
   }
   static func configuration() -> SolverConfiguration {
     let defaults = UserDefaults.standard
-    return SolverConfiguration(mode: SolverMode(rawValue: defaults.string(forKey: "solverMode") ?? "both") ?? .both,
+    return SolverConfiguration(mode: .claude,
       openAIKey: read(.openAI), claudeKey: read(.claude),
       openAIModel: defaults.string(forKey: "solverModel") ?? "gpt-5.4",
-      claudeModel: defaults.string(forKey: "claudeModel") ?? "claude-sonnet-5-5")
+      claudeModel: defaults.string(forKey: "claudeModel") ?? SolverConfiguration.defaultClaudeModel)
   }
-}
-
-enum SolverError: LocalizedError {
-  case message(String)
-  var errorDescription: String? { if case .message(let value) = self { return value }; return nil }
 }
 
 struct SolverSettingsView: View {
   @Environment(\.dismiss) private var dismiss
-  @State private var key = SolverKeychain.read(.openAI)
   @State private var claudeKey = SolverKeychain.read(.claude)
-  @State private var mode = SolverKeychain.configuration().mode
-  @State private var model = SolverKeychain.configuration().openAIModel
   @State private var claudeModel = SolverKeychain.configuration().claudeModel
   @AppStorage("cueVolume") private var volume = Double(ScanVoice.quietVolume)
   @AppStorage("voiceCommands") private var commands = true
@@ -58,29 +50,11 @@ struct SolverSettingsView: View {
   var body: some View {
     NavigationStack {
       Form {
-        Section("Solve with") {
-          Picker("AI providers", selection: $mode) {
-            ForEach(SolverMode.allCases) { Text($0.name).tag($0) }
-          }
-          Text(mode == .both
-            ? "Both APIs receive your saved photos. Claude checks the question checklist; both solve independently, then OpenAI compares and reconciles their answers. Draft answers are shared between the services."
-            : "The selected API inventories the packet, solves each group, then reviews its answers against your photos.").font(.footnote)
-        }
-        if mode != .claude {
-          Section("OpenAI") {
-            SecureField("OpenAI API key", text: $key).textInputAutocapitalization(.never).autocorrectionDisabled()
-            TextField("OpenAI vision model", text: $model).textInputAutocapitalization(.never).autocorrectionDisabled()
-            Button("Use GPT-5.4") { model = "gpt-5.4" }
-            Button("Use GPT-4.1") { model = "gpt-4.1" }
-          }
-        }
-        if mode != .openAI {
-          Section("Claude") {
-            SecureField("Anthropic API key", text: $claudeKey).textInputAutocapitalization(.never).autocorrectionDisabled()
-            TextField("Claude vision model", text: $claudeModel).textInputAutocapitalization(.never).autocorrectionDisabled()
-            Button("Use Claude Sonnet 5.5") { claudeModel = "claude-sonnet-5-5" }
-            Button("Use Claude Opus 5.5") { claudeModel = "claude-opus-5-5" }
-          }
+        Section("Claude") {
+          SecureField("Anthropic API key", text: $claudeKey).textInputAutocapitalization(.never).autocorrectionDisabled()
+          TextField("Claude vision model", text: $claudeModel).textInputAutocapitalization(.never).autocorrectionDisabled()
+          Button("Use Claude Sonnet") { claudeModel = SolverConfiguration.defaultClaudeModel }
+          Text("Claude combines overlapping photos, organizes the question parts, and returns short calculations and answers for your CG50. Unreadable details get their own review pages; the rest still finish.").font(.footnote)
         }
         Section("Voice") {
           Toggle("Hands-free voice commands", isOn: $commands)
@@ -90,18 +64,18 @@ struct SolverSettingsView: View {
           Button("Reset to quietest · 5%") { volume = 0.05 }
           Text("5% is the quiet default. iPhone volume and the selected audio output still apply.").font(.footnote)
         }
-        Section("Batch limits and usage") {
-          Text("Up to 12 photos and 60 question subparts per batch. Nothing is uploaded until you finish scanning. Longer packets and two-provider review take more time and API credit.")
-          Text("With both APIs: 2 checklist requests, then 3 requests per group of up to 6 subparts. A malformed or incomplete response gets at most one repair per request. Network and billing errors are not automatically retried. Retrying the batch repeats these requests.")
-          Text("Keys stay in separate iPhone Keychain entries. API usage is billed by the selected providers. Check flagged answers and the source transcription in the final PDF.")
+        Section("Photos and calculator output") {
+          Text("Up to \(BatchSolver.maxPhotos) photos and 60 question subparts per batch. Add wide shots and close-ups in any order, then Finish. Photo quality never blocks the other questions.")
+          Text("Each calculator picture shows the question label and Page n/m. Download the G3P ZIP, extract it on your computer, and copy the .g3p files to the calculator's storage. The PDF remains available as a reference.")
+          Text("One organization request, then one request per group of up to 6 subparts, with up to two groups running at once. Temporary service errors and malformed responses have bounded retries. API usage is billed by Anthropic.")
+          Text("Your Claude key stays in the iPhone Keychain. Photos are uploaded only after Finish. Keep the app open while solving.")
         }.font(.footnote)
         if let error { Text(error).foregroundStyle(.red) }
         Button("Save settings") {
           do {
-            try SolverKeychain.save(key.trimmed, provider: .openAI)
             try SolverKeychain.save(claudeKey.trimmed, provider: .claude)
             let defaults = UserDefaults.standard
-            defaults.set(mode.rawValue, forKey: "solverMode"); defaults.set(model.trimmed, forKey: "solverModel")
+            defaults.set(SolverMode.claude.rawValue, forKey: "solverMode")
             defaults.set(claudeModel.trimmed, forKey: "claudeModel"); dismiss()
           } catch { self.error = error.localizedDescription }
         }

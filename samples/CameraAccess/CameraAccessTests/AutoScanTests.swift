@@ -200,26 +200,70 @@ final class AutoScanTests: XCTestCase {
     XCTAssertEqual(camera.captures, 1); XCTAssertEqual(saver.saves, 1)
     XCTAssertTrue(model.showPDF); model.stop()
   }
-  func testBadStillIsRetakenWithoutSendingToAI() async throws {
+  func testPoorStillIsKeptAndWaitsForFinish() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
     let analyzer = FakePageAnalyzer(sample: goodSample(), rejectFirstStill: true)
-    let solver = FakePageSolver(page: solvedPage())
-    let saver = FakeSolutionSaver()
+    let solver = FakePageSolver(page: solvedPage()), saver = FakeSolutionSaver()
     let model = makeModel(camera, analyzer, solver, saver)
     model.start(); await waitUntil { model.phase == .seeking }
     try await sendStableFrames(camera, model: model)
-    await waitUntil { camera.resumes == 1 && model.phase == .seeking }
-    let calls = await solver.calls
-    XCTAssertEqual(calls, 0)
-    try await sendStableFrames(camera, model: model)
     await waitUntil { model.phase == .awaitingNext }
-    model.finishScanning()
-    await waitUntil { model.phase == .finished }
-    XCTAssertEqual(camera.captures, 2)
-    XCTAssertEqual(saver.saves, 1)
+    let calls = await solver.calls
+    XCTAssertEqual(calls, 0); XCTAssertEqual(model.pages.count, 1)
+    model.finishScanning(); await waitUntil { model.phase == .finished }
+    XCTAssertEqual(camera.captures, 1); XCTAssertEqual(saver.saves, 1)
     model.stop()
   }
-  func testUnreadableBatchKeepsAllPhotosWithoutPartialPDF() async throws {
+  func testMixedImportKeepsPoorPhotosAndContinuesAfterAnInvalidFile() async {
+    let bytes = paperImage().jpegData(compressionQuality: 0.9)!
+    let camera = FakeScanCamera(data: bytes), solver = FakePageSolver(page: solvedPage()), saver = FakeSolutionSaver()
+    var poor = goodSample(); poor.issue = "blur"; poor.closeEnough = false
+    let model = makeModel(camera, FakePageAnalyzer(sample: poor), solver, saver)
+    model.importPhotos(count: 3) { index in
+      if index == 1 { throw SolverError.message("Unavailable library file") }
+      return bytes
+    }
+    await waitUntil { model.phase == .idle && model.pages.count == 2 }
+    XCTAssertEqual(model.pages.count, 2); XCTAssertTrue(model.guide.contains("2"))
+    let before = await solver.calls; XCTAssertEqual(before, 0)
+    model.finishScanning(); await waitUntil { model.phase == .finished }
+    XCTAssertEqual(saver.sourceCount, 2); XCTAssertEqual(saver.saves, 1)
+    model.stop()
+  }
+  func testManualCaptureBypassesFramingAndKeepsUnreadableView() async {
+    let bytes = paperImage().jpegData(compressionQuality: 0.9)!
+    let camera = FakeScanCamera(data: bytes), solver = FakePageSolver(page: solvedPage()), saver = FakeSolutionSaver()
+    var poor = goodSample(); poor.issue = "Too far away"; poor.closeEnough = false
+    let model = makeModel(camera, FakePageAnalyzer(sample: poor), solver, saver)
+    model.start(); await waitUntil { model.phase == .seeking }
+    model.captureNow(); await waitUntil { model.phase == .awaitingNext }
+    XCTAssertEqual(camera.captures, 1); XCTAssertEqual(model.pages.count, 1)
+    model.stop()
+  }
+  func testCancellingAnImportPreventsLatePhotoSaving() async {
+    let bytes = paperImage().jpegData(compressionQuality: 0.9)!
+    let camera = FakeScanCamera(data: bytes), solver = FakePageSolver(page: solvedPage()), saver = FakeSolutionSaver()
+    let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), solver, saver)
+    var loaded: CheckedContinuation<Data, Never>?
+    model.importPhotos(count: 1) { _ in await withCheckedContinuation { loaded = $0 } }
+    await waitUntil { loaded != nil }
+    model.stop(); loaded?.resume(returning: bytes)
+    try? await Task.sleep(for: .milliseconds(100))
+    XCTAssertTrue(model.pages.isEmpty); XCTAssertEqual(model.phase, .idle)
+  }
+  func testReviewResultsCanBeSavedWithoutGlobalReadableFlag() async {
+    let bytes = paperImage().jpegData(compressionQuality: 0.9)!
+    let camera = FakeScanCamera(data: bytes), saver = FakeSolutionSaver()
+    let page = SolvedPage(readable: false, retakeReason: "", title: "Packet", problems: [
+      SolvedProblem(problem: "Unknown coefficient", steps: [], answer: "Insufficient information", check: "Unresolved",
+        label: "2(b)", reviewNote: "NEEDS REVIEW: coefficient unreadable")])
+    let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), FakePageSolver(page: page), saver)
+    model.importPhoto(bytes); await waitUntil { model.pages.count == 1 }
+    model.finishScanning(); await waitUntil { model.phase == .finished }
+    XCTAssertEqual(saver.saves, 1); XCTAssertTrue(model.showPDF)
+    model.stop()
+  }
+  func testEmptySolverResponseKeepsAllPhotosWithoutExport() async throws {
     let camera = FakeScanCamera(data: paperImage().jpegData(compressionQuality: 0.9)!)
     let page = SolvedPage(readable: false, retakeReason: "Page 1: exponent unclear.", title: "", problems: [])
     let solver = FakePageSolver(page: page), saver = FakeSolutionSaver()
@@ -309,13 +353,13 @@ final class AutoScanTests: XCTestCase {
     model.stop()
   }
 
-  func testDistantSmallTextNeverTimesOutIntoCapture() {
-    var gate = StabilityGate(), sample = goodSample()
-    sample.closeEnough = false; sample.cue = .closer
-    for n in 0..<80 { XCTAssertEqual(gate.observe(sample, at: Double(n) * 0.35), 0) }
-    sample.closeEnough = true; sample.cue = .hold
-    for n in 0...6 { _ = gate.observe(sample, at: 30 + Double(n) * 0.3) }
-    XCTAssertTrue(gate.latched)
+  func testStableDistantAndBlurryViewsCanStillBeCollected() {
+    for issue in [String?.none, "Blurred"] {
+      var gate = StabilityGate(), sample = goodSample()
+      sample.closeEnough = false; sample.cue = .closer; sample.issue = issue
+      for n in 0...10 { _ = gate.observe(sample, at: Double(n) * 0.35) }
+      XCTAssertTrue(gate.latched, "Quality is advice; overlapping views may recover the details.")
+    }
   }
   func testPageTurnDoesNotRecaptureStationaryWritingOrHeadMotion() {
     var turn = PageTurnGate(), saved = goodSample()
@@ -505,7 +549,7 @@ final class AutoScanTests: XCTestCase {
     let empty = WorkedAnswer(id: "q1", steps: [" "], answer: " ", check: " ", status: "solved", reviewNote: "")
     XCTAssertThrowsError(try AnswerSet(answers: [empty]).validate(ids: ["q1"]))
   }
-  func testBothProvidersAuditSolveReconcileAndRepairOneMissingAnswer() async throws {
+  func testLegacyBothModeUsesClaudeAndRepairsOneMissingAnswer() async throws {
     let transport = FixtureAITransport(behavior: .missingOnce)
     let solver = BatchSolver(transport: transport), photo = paperImage().jpegData(compressionQuality: 0.9)!
     let config = SolverConfiguration(mode: .both, openAIKey: "fixture-openai", claudeKey: "fixture-claude")
@@ -513,8 +557,8 @@ final class AutoScanTests: XCTestCase {
     XCTAssertEqual(result.problems.count, 2)
     XCTAssertEqual(result.problems.last?.label, "1(b)")
     let requests = await transport.requests
-    XCTAssertEqual(requests.count, 6, "Two inventories, two independent drafts, one repair, one reconciliation")
-    XCTAssertTrue(requests.contains { $0.prompt.contains("Untrusted Claude draft:") })
+    XCTAssertEqual(requests.count, 3, "One inventory, one concise solve, one structural repair")
+    XCTAssertTrue(requests.allSatisfy { $0.credential.provider == .claude })
     XCTAssertTrue(requests.contains { $0.prompt.contains("REPAIR REQUIRED:") })
     XCTAssertTrue(requests.allSatisfy { $0.photos.count == 2 })
   }
@@ -523,7 +567,7 @@ final class AutoScanTests: XCTestCase {
     for behavior in [FixtureAITransport.Behavior.emptyAlways, .networkFailure] {
       let transport = FixtureAITransport(behavior: behavior)
       do {
-        _ = try await BatchSolver(transport: transport).solve(pages: [photo], configuration: SolverConfiguration(openAIKey: "fixture"), progress: { _ in })
+        _ = try await BatchSolver(transport: transport).solve(pages: [photo], configuration: SolverConfiguration(claudeKey: "fixture"), progress: { _ in })
         XCTFail("An incomplete/error result must not become a solution")
       } catch {}
       let requests = await transport.requests
@@ -536,7 +580,7 @@ final class AutoScanTests: XCTestCase {
       configuration: SolverConfiguration(mode: .claude, openAIKey: "must-not-send", claudeKey: "claude-only"), progress: { _ in })
     XCTAssertEqual(result.problems.count, 2)
     let requests = await transport.requests
-    XCTAssertEqual(requests.count, 3)
+    XCTAssertEqual(requests.count, 2)
     XCTAssertTrue(requests.allSatisfy { $0.credential.provider == .claude && $0.credential.key == "claude-only" })
   }
   func testCombinedPDFIncludesCoverageAllPartsAndAllSourcePhotos() throws {
@@ -556,13 +600,51 @@ final class AutoScanTests: XCTestCase {
     attachment.name = "batch-pdf-proof.pdf"; attachment.lifetime = .keepAlways; add(attachment)
   }
 
+  func testReferencePDFLoadsOnePhotoAtATimeAndPropagatesDecodeFailure() throws {
+    var loaded: [Int] = []
+    weak var previous: UIImage?
+    let data = try SolutionPDF.render(page: solvedPage(), sourceCount: 3) { index in
+      XCTAssertNil(previous, "Release the previous source UIImage before decoding the next.")
+      loaded.append(index)
+      let image = self.paperImage(); previous = image
+      return image
+    }
+    XCTAssertEqual(loaded, [0, 1, 2]); XCTAssertNil(previous)
+    XCTAssertGreaterThanOrEqual(try XCTUnwrap(PDFDocument(data: data)).pageCount, 4)
+    XCTAssertThrowsError(try SolutionPDF.render(page: solvedPage(), sourceCount: 1) { _ in
+      throw SolverError.message("File cannot be decoded")
+    })
+  }
+
+  func testSavedCalculatorPackAndPreviewsRestoreFromHistory() throws {
+    let bytes = paperImage().jpegData(compressionQuality: 0.9)!
+    let page = SolvedPage(readable: true, retakeReason: "", title: "Saved calculator pack", problems: [
+      SolvedProblem(problem: "Solve 2x = 8", steps: ["2x = 8", "x = 8/2"], answer: "x = 4", check: "2(4) = 8", label: "1(a)"),
+      SolvedProblem(problem: "Missing value", steps: [], answer: "Insufficient information", check: "Not inferred", label: "1(b)",
+        reviewNote: "NEEDS REVIEW: coefficient missing")])
+    let saved = try SolutionStore().save(page: page, jpegs: [bytes])
+    defer { try? FileManager.default.removeItem(at: saved.pdf.deletingLastPathComponent()) }
+    let archive = try XCTUnwrap(saved.calculatorArchive)
+    XCTAssertEqual(try Data(contentsOf: archive).prefix(4), Data([0x50, 0x4B, 0x03, 0x04]))
+    XCTAssertGreaterThanOrEqual(saved.calculatorImages.count, 2)
+    for preview in saved.calculatorImages {
+      let image = try XCTUnwrap(UIImage(contentsOfFile: preview.path)?.cgImage)
+      XCTAssertEqual(image.width, 384); XCTAssertEqual(image.height, 192)
+      XCTAssertTrue(FileManager.default.fileExists(atPath: preview.deletingPathExtension().appendingPathExtension("g3p").path))
+    }
+    let restored = try XCTUnwrap(SolutionStore.history().first { $0.id == saved.id })
+    XCTAssertEqual(restored.calculatorArchive, archive)
+    XCTAssertEqual(restored.calculatorImages, saved.calculatorImages)
+    XCTAssertNotNil(PDFDocument(url: saved.pdf))
+  }
+
   private func temporaryDraft() -> ScanDraftStore {
     ScanDraftStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent("draft-\(UUID())"))
   }
   private func makeModel(_ camera: FakeScanCamera, _ analyzer: FakePageAnalyzer, _ solver: FakePageSolver, _ saver: FakeSolutionSaver) -> AutoScanModel {
     let model = AutoScanModel(camera: camera, analyzer: analyzer, solver: solver, saver: saver,
       draft: temporaryDraft(), voice: FakeScanVoice(),
-      configurationProvider: { SolverConfiguration(openAIKey: "test-key-never-sent", openAIModel: "gpt-4.1") })
+      configurationProvider: { SolverConfiguration(claudeKey: "test-key-never-sent") })
     model.voiceGuidance = false; return model
   }
   private func sendStableFrames(_ camera: FakeScanCamera, model: AutoScanModel, count: Int = 8) async throws {
@@ -693,7 +775,7 @@ private actor FixtureAITransport: AITransport {
     var answers = [
       WorkedAnswer(id: "q1", steps: ["Divide by 2"], answer: "x = 4", check: "2 × 4 = 8", status: "solved", reviewNote: ""),
       WorkedAnswer(id: "q2", steps: ["Divide by 3"], answer: "y = 3", check: "3 × 3 = 9", status: "solved", reviewNote: "")]
-    if behavior == .missingOnce && !missed && input.credential.provider == .openAI {
+    if behavior == .missingOnce && !missed && input.credential.provider == .claude {
       answers.removeLast(); missed = true
     }
     return try JSONEncoder().encode(AnswerSet(answers: answers))

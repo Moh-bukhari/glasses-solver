@@ -4,30 +4,14 @@ import CoreText
 import PDFKit
 import ImageIO
 
-struct SolvedProblem: Codable, Sendable {
-  let problem: String
-  let steps: [String]
-  let answer: String
-  let check: String
-  var label: String? = nil
-  var sourcePages: [Int]? = nil
-  var reviewNote: String? = nil
-}
-struct SolvedPage: Codable, Sendable {
-  let readable: Bool
-  let retakeReason: String
-  let title: String
-  let problems: [SolvedProblem]
-  var coverage: String? = nil
-  var providers: String? = nil
-}
-
 struct SavedSolution: Identifiable {
   let id: UUID
   let title: String
   let date: Date
   let pdf: URL
   let source: URL
+  var calculatorArchive: URL? = nil
+  var calculatorImages: [URL] = []
 }
 
 @MainActor
@@ -47,21 +31,36 @@ struct SolutionStore: SolutionSaving {
     let pdf = folder.appendingPathComponent("Solution.pdf"), source = folder.appendingPathComponent("Paper.jpg")
     do {
       guard !jpegs.isEmpty else { throw SolverError.message("No source photos were saved.") }
-      let images = try jpegs.map { bytes -> UIImage in
-        guard let source = CGImageSourceCreateWithData(bytes as CFData, nil),
+      let calculatorPages = try CalculatorExport.render(page: page)
+      let calculatorFolder = folder.appendingPathComponent("Calculator", isDirectory: true)
+      try FileManager.default.createDirectory(at: calculatorFolder, withIntermediateDirectories: true)
+      var previews: [URL] = []
+      for picture in calculatorPages {
+        try Task.checkCancellation()
+        let g3p = calculatorFolder.appendingPathComponent(picture.filename)
+        let preview = g3p.deletingPathExtension().appendingPathExtension("png")
+        try picture.g3p.write(to: g3p, options: .atomic)
+        try picture.previewPNG.write(to: preview, options: .atomic)
+        previews.append(preview)
+      }
+      let archive = folder.appendingPathComponent("Calculator-G3P.zip")
+      try CalculatorExport.archive(pages: calculatorPages).write(to: archive, options: .atomic)
+      // Decode each reference photo only when its PDF page is being drawn.
+      let data = try SolutionPDF.render(page: page, sourceCount: jpegs.count) { index in
+        guard let source = CGImageSourceCreateWithData(jpegs[index] as CFData, nil),
           let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: 1600] as CFDictionary)
-          else { throw SolverError.message("A source photo is unreadable.") }
+          else { throw SolverError.message("A source file could not be decoded.") }
         return UIImage(cgImage: image)
       }
-      let data = try SolutionPDF.render(page: page, sources: images)
       try data.write(to: pdf, options: .atomic)
       for (index, jpeg) in jpegs.enumerated() {
         let path = index == 0 ? source : folder.appendingPathComponent("Paper-\(index + 1).jpg")
         try jpeg.write(to: path, options: .atomic)
       }
       try JSONEncoder().encode(page).write(to: folder.appendingPathComponent("Solution.json"), options: .atomic)
-      return SavedSolution(id: id, title: page.title, date: date, pdf: pdf, source: source)
+      return SavedSolution(id: id, title: page.title, date: date, pdf: pdf, source: source,
+        calculatorArchive: archive, calculatorImages: previews)
     } catch {
       try? FileManager.default.removeItem(at: folder)
       throw error
@@ -75,7 +74,13 @@ struct SolutionStore: SolutionSaving {
         let page = try? JSONDecoder().decode(SolvedPage.self, from: data),
         FileManager.default.fileExists(atPath: folder.appendingPathComponent("Solution.pdf").path) else { return nil }
       let date = (try? folder.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date.distantPast
-      return SavedSolution(id: id, title: page.title, date: date, pdf: folder.appendingPathComponent("Solution.pdf"), source: folder.appendingPathComponent("Paper.jpg"))
+      let archive = folder.appendingPathComponent("Calculator-G3P.zip")
+      let previews = ((try? FileManager.default.contentsOfDirectory(at: folder.appendingPathComponent("Calculator"),
+        includingPropertiesForKeys: nil)) ?? []).filter { $0.pathExtension == "png" }
+        .sorted { $0.lastPathComponent < $1.lastPathComponent }
+      return SavedSolution(id: id, title: page.title, date: date, pdf: folder.appendingPathComponent("Solution.pdf"),
+        source: folder.appendingPathComponent("Paper.jpg"),
+        calculatorArchive: FileManager.default.fileExists(atPath: archive.path) ? archive : nil, calculatorImages: previews)
     }.sorted { $0.date > $1.date }
   }
 }
@@ -86,6 +91,9 @@ enum SolutionPDF {
     try render(page: page, sources: source.map { [$0] } ?? [])
   }
   static func render(page: SolvedPage, sources: [UIImage]) throws -> Data {
+    try render(page: page, sourceCount: sources.count) { sources[$0] }
+  }
+  static func render(page: SolvedPage, sourceCount: Int, loadSource: (Int) throws -> UIImage) throws -> Data {
     let body = NSMutableAttributedString(string: "")
     var keepWithNext: [NSRange] = []
     func append(_ text: String, size: CGFloat = 12, bold: Bool = false, color: UIColor = .black, keep: Bool = false) {
@@ -125,6 +133,7 @@ enum SolutionPDF {
     let bounds = CGRect(x: 0, y: 0, width: 612, height: 792)
     let framesetter = CTFramesetterCreateWithAttributedString(body)
     var offset = 0, pageNumber = 0, overflow = false
+    var sourceError: Error?
     let format = UIGraphicsPDFRendererFormat()
     format.documentInfo = [kCGPDFContextTitle as String: page.title, kCGPDFContextCreator as String: "Glasses Solver"]
     let data = UIGraphicsPDFRenderer(bounds: bounds, format: format).pdfData { renderer in
@@ -161,14 +170,21 @@ enum SolutionPDF {
         offset += count
       }
       if offset < body.length { overflow = true }
-      for (sourceIndex, source) in sources.enumerated() {
-        renderer.beginPage(); chrome()
-        ("Source photograph \(sourceIndex + 1)" as NSString).draw(at: CGPoint(x: 44, y: 56), withAttributes: [.font: UIFont.boldSystemFont(ofSize: 18)])
-        let scale = min(524 / source.size.width, 636 / source.size.height)
-        let size = CGSize(width: source.size.width * scale, height: source.size.height * scale)
-        source.draw(in: CGRect(x: (612 - size.width) / 2, y: 94, width: size.width, height: size.height))
+      for sourceIndex in 0..<sourceCount {
+        do {
+          try Task.checkCancellation()
+          try autoreleasepool {
+            let source = try loadSource(sourceIndex)
+            renderer.beginPage(); chrome()
+            ("Source photograph \(sourceIndex + 1)" as NSString).draw(at: CGPoint(x: 44, y: 56), withAttributes: [.font: UIFont.boldSystemFont(ofSize: 18)])
+            let scale = min(524 / source.size.width, 636 / source.size.height)
+            let size = CGSize(width: source.size.width * scale, height: source.size.height * scale)
+            source.draw(in: CGRect(x: (612 - size.width) / 2, y: 94, width: size.width, height: size.height))
+          }
+        } catch { sourceError = error; break }
       }
     }
+    if let sourceError { throw sourceError }
     guard !overflow, PDFDocument(data: data)?.pageCount ?? 0 > 0 else {
       throw SolverError.message("The solution could not fit in a complete PDF. No partial PDF was saved.")
     }

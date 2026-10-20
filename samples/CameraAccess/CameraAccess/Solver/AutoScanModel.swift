@@ -7,7 +7,7 @@ import UIKit
 final class AutoScanModel {
   enum Phase: String { case idle, connecting, seeking, awaitingNext, capturing, checking, solving, saving, finished, failed }
   private(set) var phase: Phase = .idle
-  private(set) var guide = "Scan the papers one by one. Finish scanning when the whole set is saved."
+  private(set) var guide = "Add wide shots and close-ups in any order. Claude combines them when you finish."
   private(set) var voiceStatus = ""
   private(set) var progress = 0.0
   private(set) var preview: CGImage?
@@ -23,6 +23,7 @@ final class AutoScanModel {
   var cueVolume: Float = ScanVoice.quietVolume
   var isRunning: Bool { [.connecting, .seeking, .awaitingNext, .capturing, .checking, .solving, .saving].contains(phase) }
   var isCollecting: Bool { [.seeking, .awaitingNext, .capturing, .checking].contains(phase) }
+  var canCapture: Bool { [.seeking, .awaitingNext].contains(phase) && (pages.count < BatchSolver.maxPhotos || replacing != nil) }
   var canFinish: Bool { !pages.isEmpty && [.idle, .failed, .seeking, .awaitingNext].contains(phase) }
 
   @ObservationIgnored private let camera: any ScanCamera
@@ -69,7 +70,7 @@ final class AutoScanModel {
 
   func start(replacing index: Int? = nil) {
     guard !isRunning || [.seeking, .awaitingNext].contains(phase) else { return }
-    guard pages.count < 12 || index != nil else { guide = "12 pages saved. Finish this batch before starting another."; return }
+    guard pages.count < BatchSolver.maxPhotos || index != nil else { guide = "\(BatchSolver.maxPhotos) photos saved. Finish this batch before starting another."; return }
     if let index, !pages.indices.contains(index) { return }
     begin(imported: false); replacing = index
     let id = runID
@@ -92,11 +93,54 @@ final class AutoScanModel {
   }
 
   func importPhoto(_ data: Data, replacing index: Int? = nil) {
-    guard !isRunning, pages.count < 12 || index != nil else { return }
+    guard !isRunning, pages.count < BatchSolver.maxPhotos || index != nil else { return }
     if let index, !pages.indices.contains(index) { return }
     begin(imported: true); replacing = index
     let id = runID; phase = .checking; guide = "Checking the selected photo…"
     worker = Task { [weak self] in await self?.process(data: data, id: id) }
+  }
+
+  /// Load one selected image at a time so large photo-library selections do not fill memory.
+  func importPhotos(count: Int, load: @escaping @MainActor (Int) async throws -> Data) {
+    guard !isRunning, count > 0, pages.count < BatchSolver.maxPhotos else { return }
+    begin(imported: true)
+    let id = runID, acceptedCount = min(count, BatchSolver.maxPhotos - pages.count)
+    phase = .checking; guide = "Importing \(acceptedCount) photos…"
+    worker = Task { [weak self] in
+      guard let self else { return }
+      var failures: [Int] = [], saved = 0
+      for index in 0..<acceptedCount {
+        do {
+          try Task.checkCancellation(); guard runID == id else { return }
+          guide = "Importing photo \(index + 1) of \(acceptedCount)…"
+          let bytes = try await load(index)
+          try Task.checkCancellation(); guard runID == id else { return }
+          let photo = try await analyzer.prepare(bytes)
+          try Task.checkCancellation(); guard runID == id else { return }
+          pages = try draft.add(photo.jpeg, to: pages, replacing: nil)
+          capturedPreview = pages.last?.thumbnail; saved += 1
+        } catch {
+          guard runID == id, !Task.isCancelled else { return }
+          failures.append(index + 1)
+        }
+      }
+      guard runID == id else { return }
+      phase = .idle; restoreIdleTimer()
+      guide = "\(saved) photos added. \(pages.count) photos saved for Claude."
+      if !failures.isEmpty {
+        guide += " Could not load or save selected photo(s) \(failures.map(String.init).joined(separator: ", ")). Add them again if needed."
+      }
+      if count > acceptedCount { guide += " The batch limit is \(BatchSolver.maxPhotos) photos; remaining selections were not imported." }
+      if finishRequested { finishRequested = false; finishScanning() }
+    }
+  }
+
+  /// Capture is always available while collecting, even if framing advice cannot be satisfied.
+  func captureNow() {
+    guard canCapture else { return }
+    analysisTask?.cancel(); analysisTask = nil
+    turnGate.saved(sample, at: ProcessInfo.processInfo.systemUptime)
+    capture(id: runID)
   }
 
   func finishScanning() {
@@ -113,7 +157,8 @@ final class AutoScanModel {
     worker = Task { [weak self] in
       guard let self else { return }
       do {
-        let jpegs = try batch.map { try Data(contentsOf: $0.url) }
+        // File-backed originals avoid retaining 24 full JPEGs in heap memory while Claude runs.
+        let jpegs = try batch.map { try Data(contentsOf: $0.url, options: .mappedIfSafe) }
         let solution = try await solver.solve(pages: jpegs, configuration: configuration) { [weak self] message in
           Task { @MainActor [weak self] in
             guard let self, self.runID == id, self.phase == .solving else { return }
@@ -121,14 +166,14 @@ final class AutoScanModel {
           }
         }
         try Task.checkCancellation(); guard runID == id else { return }
-        guard solution.readable, !solution.problems.isEmpty else {
-          throw SolverError.message("The packet could not be completely read. \(solution.retakeReason)")
+        guard !solution.problems.isEmpty else {
+          throw SolverError.message("Claude returned no question results. Your photos are saved for retry.")
         }
-        phase = .saving; guide = "Compiling every answer and source photo into one PDF."; say(guide)
+        phase = .saving; guide = "Creating labeled calculator pictures and the G3P pack."; say(guide)
         let saved = try saver.save(page: solution, jpegs: jpegs)
         try Task.checkCancellation(); guard runID == id else { return }
-        result = saved; phase = .finished; guide = "Your combined PDF is ready. Check any items marked NEEDS REVIEW."
-        restoreIdleTimer(); showPDF = true; say("Your combined solution PDF is ready on your phone.")
+        result = saved; phase = .finished; guide = "Your calculator pictures are ready. Unreadable items have labeled review pages."
+        restoreIdleTimer(); showPDF = true; say("Your calculator picture pack is ready on your phone.")
         // Keep the draft until New batch, so a disputed transcription can still be replaced.
       } catch { guard runID == id else { return }; fail(error.localizedDescription) }
     }
@@ -136,7 +181,7 @@ final class AutoScanModel {
 
   func nextPage() {
     guard phase == .awaitingNext else { return }
-    guard pages.count < 12 else { guide = "12 pages saved. Say finish scanning."; say(guide); return }
+    guard pages.count < BatchSolver.maxPhotos else { guide = "\(BatchSolver.maxPhotos) photos saved. Say finish scanning."; say(guide); return }
     gate.reset(); turnGate.reset(); progress = 0; attempts = 0; phase = .seeking
     guide = "Ready for page \(pages.count + 1). Hold the next page close and steady."; say(guide)
   }
@@ -147,7 +192,7 @@ final class AutoScanModel {
     case .retakeLast:
       guard !pages.isEmpty, [.seeking, .awaitingNext].contains(phase) else { return }
       replacing = pages.count - 1; attempts = 0; gate.reset(); turnGate.reset(); phase = .seeking
-      guide = "Retaking page \(pages.count). The old photo stays saved until the replacement is clear."; say(guide)
+      guide = "Retaking page \(pages.count). The old photo stays saved until the replacement is stored."; say(guide)
     case .cancel: stop()
     }
   }
@@ -197,11 +242,11 @@ final class AutoScanModel {
         guard runID == id, [.seeking, .awaitingNext].contains(phase) else { return }
         analysisTask = nil; sample = value
         if phase == .awaitingNext {
-          if pages.count < 12, turnGate.observe(value, at: time) { nextPage() }
+          if pages.count < BatchSolver.maxPhotos, turnGate.observe(value, at: time) { nextPage() }
           return
         }
         progress = gate.observe(value, at: time)
-        if !value.acceptable || !value.closeEnough {
+        if progress < 1 && (!value.acceptable || !value.closeEnough) {
           let cue = !value.closeEnough && value.cue == .hold ? ScanCue.closer : value.cue
           guide = value.issue ?? cue.message; speakCue(cue, at: time)
         } else if progress < 1 {
@@ -209,32 +254,33 @@ final class AutoScanModel {
           guide = cue == .hold ? "Hold still… \(Int(progress * 100))%" : cue.message
           speakCue(cue, at: time)
         } else {
-          phase = .capturing; guide = "Taking page \((replacing ?? pages.count) + 1). Keep still…"; progress = 0
-          say("Hold. Taking the photo.")
           turnGate.saved(value, at: time)
-          worker = Task { [weak self] in
-            guard let self else { return }
-            do {
-              attempts += 1; let data = try await camera.capture()
-              try Task.checkCancellation(); guard runID == id else { return }
-              await process(data: data, id: id)
-            } catch { guard runID == id else { return }; fail(error.localizedDescription) }
-          }
+          capture(id: id)
         }
       } catch {
         guard runID == id else { return }
-        analysisTask = nil; fail("Could not inspect the camera image. \(error.localizedDescription)")
+        analysisTask = nil
+        if phase == .seeking { guide = "Auto framing is unavailable. Use Capture this view to keep collecting." }
       }
+    }
+  }
+  private func capture(id: UUID) {
+    phase = .capturing; guide = "Taking photo \((replacing ?? pages.count) + 1). Keep still…"; progress = 0
+    say("Hold. Taking the photo.")
+    worker = Task { [weak self] in
+      guard let self else { return }
+      do {
+        attempts += 1; let data = try await camera.capture()
+        try Task.checkCancellation(); guard runID == id else { return }
+        await process(data: data, id: id)
+      } catch { guard runID == id else { return }; fail(error.localizedDescription) }
     }
   }
   private func process(data: Data, id: UUID) async {
     do {
-      phase = .checking; guide = "Checking the photo for clear writing…"; progress = 0
+      phase = .checking; guide = "Saving this photo for the combined packet…"; progress = 0
       let photo = try await analyzer.prepare(data)
       try Task.checkCancellation(); guard runID == id else { return }
-      if !photo.sample.acceptable || !photo.sample.closeEnough {
-        try await retake(photo.sample.issue ?? "Move closer so the small writing is readable.", id: id); return
-      }
       let pageNumber = (replacing ?? pages.count) + 1
       pages = try draft.add(photo.jpeg, to: pages, replacing: replacing)
       capturedPreview = pages[pageNumber - 1].thumbnail; replacing = nil; attempts = 0
@@ -249,19 +295,10 @@ final class AutoScanModel {
         try await resume(id: id)
         guard runID == id else { return }
         phase = .awaitingNext; progress = 0
-        guide = pages.count < 12 ? "Page \(pageNumber) saved. Turn to the next page, or say finish scanning." : "12 pages saved. Say finish scanning."
+        guide = pages.count < BatchSolver.maxPhotos ? "Page \(pageNumber) saved. Turn to the next page, or say finish scanning." : "\(BatchSolver.maxPhotos) photos saved. Say finish scanning."
         say(guide)
       }
     } catch { guard runID == id else { return }; fail(error.localizedDescription) }
-  }
-  private func retake(_ reason: String, id: UUID) async throws {
-    guard !imported else { throw SolverError.message(reason + " Choose a clearer photo.") }
-    guard attempts < 3 else { throw SolverError.message("Three attempts were unclear. " + reason + " Earlier pages are saved.") }
-    guide = reason; say(reason)
-    try await Task.sleep(for: .seconds(2)); try Task.checkCancellation()
-    guard runID == id else { return }
-    try await resume(id: id); guard runID == id else { return }
-    gate.reset(); progress = 0; phase = .seeking; guide = reason
   }
   private func resume(id: UUID) async throws {
     do { try await camera.resumePreview() }

@@ -128,7 +128,7 @@ struct StabilityGate: Sendable {
 
   mutating func observe(_ sample: PageSample, at time: TimeInterval) -> Double {
     guard !latched else { return 1 }
-    guard sample.acceptable && sample.closeEnough else { reset(); return 0 }
+    guard !sample.fingerprint.isEmpty else { reset(); return 0 }
     let gap = lastTime.map { time - $0 > 1.1 || time <= $0 } ?? false
     let moved = previous.map { Self.movement($0, sample) > 0.045 || Self.imageDifference($0, sample) > 0.10 } ?? false
     let drifted = anchor.map { Self.movement($0, sample) > 0.065 || Self.imageDifference($0, sample) > 0.14 } ?? false
@@ -197,7 +197,7 @@ actor PageAnalyzer: PageAnalyzing {
       closeEnough: !(lineHeight > 0 && lineHeight * Double(image.height) < 10)
         && !(bounds.map { $0.width < 0.18 && $0.height < 0.14 } ?? false),
       cue: ContentFraming.cue(bounds: bounds, lineHeight: lineHeight, imageHeight: image.height))
-    // Only obvious darkness, missing detail, or heavy blur can veto a capture. Geometry cannot.
+    // Darkness, missing detail and blur are advice only; the packet may contain clearer overlapping views.
     if metrics.mean < 0.07 {
       sample.cue = .moreLight; sample.issue = sample.cue.message
     } else if metrics.contrast < 0.018 {
@@ -223,7 +223,7 @@ actor PageAnalyzer: PageAnalyzing {
     guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
       throw SolverError.message("Could not decode this photo.")
     }
-    let sample = try analyze(image, still: true)
+    let sample = (try? analyze(image, still: true)) ?? PageSample(issue: "Framing analysis unavailable; photo kept.")
     // Preserve full dimensions. Normalize orientation/format only; no crop, enhancement or OCR.
     let output = NSMutableData()
     guard let destination = CGImageDestinationCreateWithData(output, UTType.jpeg.identifier as CFString, 1, nil) else {
@@ -278,7 +278,7 @@ struct PageTurnGate {
   mutating func saved(_ sample: PageSample, at time: Double) { saved = sample; savedAt = time; changedFrames = 0 }
   mutating func reset() { self = Self() }
   mutating func observe(_ sample: PageSample, at time: Double) -> Bool {
-    guard let saved, time - savedAt >= 2, sample.acceptable, sample.closeEnough else { changedFrames = 0; return false }
+    guard let saved, time - savedAt >= 2, !sample.fingerprint.isEmpty else { changedFrames = 0; return false }
     let a = saved.contentFingerprint, b = sample.contentFingerprint
     let changed: Bool
     if !a.isEmpty, a.count == b.count {

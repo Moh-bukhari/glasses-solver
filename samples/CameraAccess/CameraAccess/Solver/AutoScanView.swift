@@ -11,6 +11,7 @@ struct AutoScanView: View {
   @State private var model = AutoScanModel(camera: AutoScanCamera(wearables: Wearables.shared))
   @State private var settings = false
   @State private var selection: PhotosPickerItem?
+  @State private var selections: [PhotosPickerItem] = []
   @State private var importError: String?
   @State private var replacingPhoto: Int?
   @State private var confirmNewBatch = false
@@ -23,8 +24,8 @@ struct AutoScanView: View {
     NavigationStack {
       ScrollView {
         VStack(alignment: .leading, spacing: 18) {
-          Text("All your pages. One solution PDF.").font(.title2.bold())
-          Text("Scan each page close up. Say “finish scanning” when done. Your AI-reviewed PDF opens automatically.")
+          Text("Your photos. Calculator-ready answers.").font(.title2.bold())
+          Text("Add wide shots, close-ups and overlapping photos. Claude puts the questions together and makes labeled G3P pictures for your CG50.")
             .foregroundStyle(.secondary)
           viewfinder
           HStack(spacing: 10) {
@@ -43,9 +44,13 @@ struct AutoScanView: View {
               applyVoiceSettings(); model.finishScanning()
               if model.needsKey { settings = true }
             } label: {
-              Label("Finish scanning · Solve \(model.pages.count) pages", systemImage: "sparkles")
+              Label("Finish scanning · Solve \(model.pages.count) photos", systemImage: "sparkles")
                 .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
             }.buttonStyle(.borderedProminent).accessibilityIdentifier("finish_scanning")
+          }
+          if model.canCapture {
+            Button { model.captureNow() } label: { Label("Capture this view", systemImage: "camera") }
+              .buttonStyle(.bordered).accessibilityIdentifier("capture_now")
           }
           if model.phase == .awaitingNext {
             Button("Next page") { model.nextPage() }.buttonStyle(.bordered)
@@ -54,7 +59,7 @@ struct AutoScanView: View {
             Button(model.isCollecting ? "Pause scanning" : "Stop · keep saved pages", role: .destructive) { model.stop() }
               .buttonStyle(.bordered)
           } else {
-            if !importOnly && model.pages.count < 12 {
+            if !importOnly && model.pages.count < BatchSolver.maxPhotos {
               if let wearablesVM, wearablesVM.registrationState != .registered {
                 Button("Connect glasses in Meta AI") { wearablesVM.connectGlasses() }.buttonStyle(.borderedProminent)
               } else {
@@ -66,12 +71,13 @@ struct AutoScanView: View {
                 }.buttonStyle(.borderedProminent).accessibilityIdentifier("start_auto_scan")
               }
             }
-            if model.pages.count < 12 {
-              PhotosPicker(selection: $selection, matching: .images) { Label("Add a paper photo", systemImage: "photo") }
-                .simultaneousGesture(TapGesture().onEnded { replacingPhoto = nil }).buttonStyle(.bordered)
+            if model.pages.count < BatchSolver.maxPhotos {
+              PhotosPicker(selection: $selections, maxSelectionCount: BatchSolver.maxPhotos - model.pages.count,
+                selectionBehavior: .ordered, matching: .images) { Label("Add paper photos", systemImage: "photo.on.rectangle.angled") }
+                .buttonStyle(.bordered)
             }
             if model.result != nil {
-              Button("Open combined PDF") { model.showPDF = true }.buttonStyle(.borderedProminent)
+              Button("Open calculator pictures") { model.showPDF = true }.buttonStyle(.borderedProminent)
             }
           }
           if !model.pages.isEmpty { pageQueue }
@@ -80,7 +86,7 @@ struct AutoScanView: View {
           }
           Toggle("Spoken cues and progress", isOn: $voiceGuidance)
             .onChange(of: voiceGuidance) { _, _ in applyVoiceSettings() }
-          Text("Keep this app open and the phone unlocked. Pages stay saved if you pause. Bring all writing and diagrams into view; no clean background or paper outline is needed.")
+          Text("Keep this app open and the phone unlocked. Photos stay saved if you pause. Wide views provide context; close-ups fill in small text. Blurry photos do not stop the packet.")
             .font(.footnote).foregroundStyle(.secondary)
           Text("Cue volume: \(Int((cueVolume * 100).rounded()))% · change in Settings.").font(.caption).foregroundStyle(.secondary)
         }.padding(20)
@@ -91,8 +97,18 @@ struct AutoScanView: View {
       .toolbar { Button { settings = true } label: { Image(systemName: "gearshape") }.disabled(model.isRunning) }
       .sheet(isPresented: $settings, onDismiss: { applyVoiceSettings() }) { SolverSettingsView() }
       .sheet(isPresented: $model.showPDF) { if let result = model.result { SolutionViewer(solution: result) } }
-      .confirmationDialog("Clear the saved draft and start a new batch? Existing PDFs are kept.", isPresented: $confirmNewBatch, titleVisibility: .visible) {
+      .confirmationDialog("Clear the saved draft and start a new batch? Existing solutions are kept.", isPresented: $confirmNewBatch, titleVisibility: .visible) {
         Button("Start new batch", role: .destructive) { model.newBatch() }
+      }
+      .onChange(of: selections) { _, items in
+        guard !items.isEmpty else { return }
+        selections = []; importError = nil; applyVoiceSettings()
+        model.importPhotos(count: items.count) { index in
+          guard let data = try await items[index].loadTransferable(type: Data.self) else {
+            throw SolverError.message("Could not load this photo from the library.")
+          }
+          return data
+        }
       }
       .task(id: selection) {
         guard let selection else { return }
@@ -122,7 +138,7 @@ struct AutoScanView: View {
   }
   private var pageQueue: some View {
     VStack(alignment: .leading, spacing: 10) {
-      Text("Saved pages · \(model.pages.count)/12").font(.headline)
+      Text("Saved photos · \(model.pages.count)/\(BatchSolver.maxPhotos)").font(.headline)
       ScrollView(.horizontal) {
         HStack(alignment: .top, spacing: 12) {
           ForEach(Array(model.pages.enumerated()), id: \.element.id) { index, page in
@@ -131,7 +147,7 @@ struct AutoScanView: View {
                 Image(uiImage: image).resizable().scaledToFit().frame(width: 110, height: 125)
                   .background(.black).clipShape(RoundedRectangle(cornerRadius: 10))
               }
-              Text("Page \(index + 1)").font(.caption.bold())
+              Text("Photo \(index + 1)").font(.caption.bold())
               if !model.isRunning {
                 if !importOnly {
                   Button("Retake") { applyVoiceSettings(); model.start(replacing: index) }.font(.caption)
@@ -196,14 +212,57 @@ private struct ContentOutline: Shape {
 struct SolutionViewer: View {
   let solution: SavedSolution
   @Environment(\.dismiss) private var dismiss
+  @State private var showReference = false
   var body: some View {
     NavigationStack {
-      PDFPreview(url: solution.pdf).ignoresSafeArea(edges: .bottom)
-        .navigationTitle(solution.title).navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-          ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
-          ToolbarItem(placement: .topBarTrailing) { ShareLink(item: solution.pdf) { Image(systemName: "square.and.arrow.up") } }
+      Group {
+        if solution.calculatorImages.isEmpty {
+          PDFPreview(url: solution.pdf).ignoresSafeArea(edges: .bottom)
+        } else {
+          ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+              if let archive = solution.calculatorArchive {
+                ShareLink(item: archive) { Label("Share G3P pack", systemImage: "square.and.arrow.up") }
+                  .buttonStyle(.borderedProminent)
+              }
+              Text("Unzip on your computer and copy the .g3p pictures to your CG50. Each picture includes its question label and page number.")
+                .font(.footnote).foregroundStyle(.secondary)
+              LazyVStack(spacing: 18) {
+                ForEach(solution.calculatorImages, id: \.self) { url in
+                  VStack(alignment: .leading, spacing: 6) {
+                    if let image = UIImage(contentsOfFile: url.path) {
+                      Image(uiImage: image).resizable().interpolation(.none).scaledToFit()
+                        .frame(maxWidth: 384).border(Color.gray.opacity(0.35))
+                    }
+                    HStack {
+                      Text(url.deletingPathExtension().lastPathComponent).font(.caption.monospaced())
+                      Spacer()
+                      ShareLink(item: url.deletingPathExtension().appendingPathExtension("g3p")) {
+                        Image(systemName: "square.and.arrow.up")
+                      }.accessibilityLabel("Share this calculator picture")
+                    }.frame(maxWidth: 384)
+                  }
+                }
+              }
+              Button("Open reference PDF") { showReference = true }
+              ShareLink("Share reference PDF", item: solution.pdf)
+            }.padding()
+          }
         }
+      }
+      .navigationTitle(solution.title).navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
+        ToolbarItem(placement: .topBarTrailing) {
+          ShareLink(item: solution.calculatorArchive ?? solution.pdf) { Image(systemName: "square.and.arrow.up") }
+        }
+      }
+      .sheet(isPresented: $showReference) {
+        NavigationStack {
+          PDFPreview(url: solution.pdf).navigationTitle("Reference PDF").navigationBarTitleDisplayMode(.inline)
+            .toolbar { Button("Done") { showReference = false } }
+        }
+      }
     }
   }
 }
@@ -230,7 +289,7 @@ struct SolutionHistoryView: View {
           }
         }
       }.overlay {
-        if entries.isEmpty { ContentUnavailableView("Your PDFs appear here", systemImage: "doc.richtext", description: Text("Finish an Auto Scan or import a paper photo.")) }
+        if entries.isEmpty { ContentUnavailableView("Your solutions appear here", systemImage: "doc.richtext", description: Text("Finish an Auto Scan or import a paper photo.")) }
       }
       .navigationTitle("Solutions")
       .onAppear { entries = SolutionStore.history() }
