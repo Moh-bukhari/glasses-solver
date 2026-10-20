@@ -1,10 +1,10 @@
 # Glasses Solver 1.4 — photo packet to CG50 pictures
 
-This update changes the solver to **Claude only** and adds a calculator picture pack. It combines wide shots, close-ups and repeated views of the same questions. A poor photo no longer blocks the other questions. Project version is 1.4 build 6. The current implementation must have a matching successful iOS build and test run before it is treated as a new installable release; the older 1.3.1 installer does not include these changes.
+This update changes the solver to **Claude only** and adds a calculator picture pack. It combines wide shots, close-ups and repeated views of the same questions. A poor photo no longer blocks the other questions. Project version is 1.4 build 6. [The iOS verification and Release build passed](https://github.com/Moh-bukhari/glasses-solver/actions/runs/39362935336) for app commit `806db51`. [Download the IPA ZIP](https://github.com/Moh-bukhari/glasses-solver/actions/runs/39362935336/artifacts/12238381045); the older 1.3.1 installer does not include these changes.
 
 ## Install with iloader
 
-1. Open [Build Glasses Solver IPA](https://github.com/Moh-bukhari/glasses-solver/actions/workflows/build-solver.yml). Select the run for the intended app commit and confirm that **both** its verify and build jobs passed.
+1. Open [the verified build for this update](https://github.com/Moh-bukhari/glasses-solver/actions/runs/39362935336). Both its verify and build jobs passed. For later builds, select the run matching the intended app commit.
 2. Download **GlassesSolver-IPA** under Artifacts and extract the ZIP.
 3. Use your existing iloader installation to install `GlassesSolver-unsigned.ipa` over the existing app, with the same Apple account/signing identity. Keeping the app installed preserves its drafts and credentials when the signing/Keychain access remains unchanged.
 4. Open **Glasses Solver → Auto Scan → Settings**, enter your **Anthropic API key**, and save. The default is **Claude Sonnet 5.5** (`claude-sonnet-5-5`); the model field is editable if your account needs a different compatible vision model. Existing OpenAI credentials remain stored but this workflow does not use them.
@@ -45,7 +45,7 @@ Files are also saved in **Files → On My iPhone → Glasses Solver → Solution
 
 ## Verification status
 
-The macOS workflow runs `AutoScanTests`, `ClaudePipelineTests` and `CalculatorExportTests`, then builds a Release IPA only after verification succeeds. These fixtures exercise photo retention, explicit Finish, cancellation, overlapping-source inventory, incomplete-question output, Claude request handling and calculator format/layout. Current local Swift 6.3 checks verified G3P headers/pixels/checksums and ZIP CRCs through an independent decoder, including a byte-for-byte reference white picture. The production Claude pipeline also passed 12 portable Swift runtime checks with prepared photo fixtures. Image preprocessing, iOS rendering/simulator tests and the Release build have not yet run for this update.
+The macOS workflow runs `AutoScanTests`, `ClaudePipelineTests` and `CalculatorExportTests`, then builds a Release IPA only after verification succeeds. These fixtures exercise photo retention, explicit Finish, cancellation, overlapping-source inventory, incomplete-question output, Claude request handling and calculator format/layout. Current local Swift 6.3 checks verified G3P headers/pixels/checksums and ZIP CRCs through an independent decoder, including a byte-for-byte reference white picture. The production Claude pipeline also passed 12 portable Swift runtime checks with prepared photo fixtures. The selected iOS suites and Release build passed in [run #41](https://github.com/Moh-bukhari/glasses-solver/actions/runs/39362935336), tied to app commit `806db51`. Exact current test counts were not inspected from the result archive.
 
 The historical **41 AutoScanTests passed** result belongs to **1.3.1**, before this calculator update. Current checks and release artifacts must be tied to the current commit. Paid Claude calls, physical glasses/microphone behavior and actual CG50 picture import/display are separate acceptance checks and must not be described as verified from fixtures alone.
 
