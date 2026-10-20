@@ -517,6 +517,18 @@ final class PageSolvingTests: XCTestCase {
       XCTAssertEqual(request.credential.key, request.credential.provider == .claude ? "fixture-claude" : "fixture-openai")
     }
   }
+  func testABadKeyInBothModeSolvesWithTheOtherProviderForTheSession() async throws {
+    let revoked = AIServiceError.http(provider: .claude, status: 401, retryAfter: nil, detail: "invalid x-api-key")
+    let transport = ScriptedTransport([.failure(revoked), .success(valid()), .success(valid()), .success(valid())])
+    let configuration = SolverConfiguration(mode: .both, openAIKey: "fixture-openai", claudeKey: "fixture-claude")
+    let solver = fastSolver(transport), notices = NoticeLog()
+    _ = try await solver.solve(try pageJob(), configuration: configuration, progress: { notices.add($0) })
+    _ = try await solver.solve(try pageJob(), configuration: configuration, progress: { _ in })
+    let providers = await transport.requests.map(\.credential.provider)
+    XCTAssertEqual(providers.filter { $0 == .claude }.count, 1, "The dead key is tried once, not on every page.")
+    XCTAssertEqual(providers.last, .openAI)
+    XCTAssertTrue(notices.all.contains { $0.contains("Claude can't be used") && $0.contains("OpenAI only") }, "\(notices.all)")
+  }
   func testClaudeOnlyNeverSendsTheOpenAIKey() async throws {
     let transport = ScriptedTransport([.success(valid())])
     _ = try await fastSolver(transport).solve(try pageJob(),
@@ -589,4 +601,12 @@ private actor ScriptedTransport: AITransport {
     guard !script.isEmpty else { throw URLError(.badServerResponse) }
     return try script.removeFirst().get()
   }
+}
+
+/// Progress notices collected from a solver's @Sendable callback.
+private final class NoticeLog: @unchecked Sendable {
+  private let lock = NSLock()
+  private var items: [String] = []
+  func add(_ message: String) { lock.lock(); items.append(message); lock.unlock() }
+  var all: [String] { lock.lock(); defer { lock.unlock() }; return items }
 }

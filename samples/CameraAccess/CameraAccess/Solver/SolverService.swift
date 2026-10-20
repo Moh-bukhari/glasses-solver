@@ -122,6 +122,7 @@ struct SolutionStore: SolutionSaving {
       let calculatorName = CalculatorLayout.folderName(date: date, taken: Self.calculatorFolders())
       let calculator = folder.appendingPathComponent(calculatorName, isDirectory: true)
       let pictures = try await Task.detached(priority: .userInitiated) { try CalculatorPictures.write(page, into: calculator) }.value
+      Self.rememberCalculatorFolder(calculatorName)
       let stored = StoredSolution(id: id, date: date, firstPhoto: names[0], solution: page,
         calculator: pictures.isEmpty ? nil : calculatorName)
       try JSONEncoder().encode(stored).write(to: folder.appendingPathComponent(Self.record), options: .atomic)
@@ -135,13 +136,19 @@ struct SolutionStore: SolutionSaving {
       throw error
     }
   }
-  /// Calculator folder names already used by saved packets, so each packet's folder is unique on the calculator.
+  /// Every calculator folder name ever issued (remembered, plus any still on disk): a name is never given to a second
+  /// packet, so copying a new folder can't merge into an old one on the calculator.
   static func calculatorFolders() -> Set<String> {
     let files = FileManager.default
     let packets = (try? files.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
-    return Set(packets.flatMap { packet in
-      ((try? files.contentsOfDirectory(atPath: packet.path)) ?? []).filter { $0.hasPrefix("SOL") }
-    })
+    let onDisk = packets.flatMap { packet in
+      ((try? files.contentsOfDirectory(atPath: packet.path)) ?? []).filter { $0.hasPrefix("S") && $0.count == 8 }
+    }
+    return Set(onDisk).union(UserDefaults.standard.stringArray(forKey: "calculatorFolders") ?? [])
+  }
+  static func rememberCalculatorFolder(_ name: String) {
+    let defaults = UserDefaults.standard
+    defaults.set((defaults.stringArray(forKey: "calculatorFolders") ?? []) + [name], forKey: "calculatorFolders")
   }
 
   /// A zip of a calculator folder for the share sheet (to a computer, cloud drive or the calculator drive).

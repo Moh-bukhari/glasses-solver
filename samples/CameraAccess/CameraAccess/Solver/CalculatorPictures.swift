@@ -19,21 +19,29 @@ enum CalculatorPictures {
       width: { text, style in Double(CalculatorPictures.width(text, font: CalculatorPictures.font(for: style))) })
   }
 
-  /// Writes every picture of `page` into `folder` (created), in the order they page on the calculator.
+  /// Writes every picture of `page` into `folder` (created), in the order they page on the calculator. A packet with
+  /// more than 200 pictures (the calculator lists at most 200 files per folder) is split into PART1, PART2, ... inside it.
   static func write(_ page: SolvedPage, into folder: URL) throws -> [URL] {
-    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-    var files: [URL] = []
     let metrics = self.metrics
-    for (number, problem) in page.problems.enumerated() {
+    let screens = page.problems.enumerated().map { number, problem -> [CalculatorLayout.Screen] in
       let unsure = problem.reviewNote?.hasPrefix("NEEDS REVIEW") == true
       // Answers saved before 2.7 have no short working: their steps stand in.
       let brief = (problem.brief?.isEmpty == false ? problem.brief ?? [] : problem.steps).map(clean)
-      let screens = CalculatorLayout.screens(label: clean(problem.label ?? "Problem \(number + 1)"), brief: brief,
+      return CalculatorLayout.screens(label: clean(problem.label ?? "Problem \(number + 1)"), brief: brief,
         answer: clean(problem.answer), unsure: unsure, metrics: metrics)
-      for (index, screen) in screens.enumerated() {
-        let url = folder.appendingPathComponent(CalculatorLayout.fileName(question: number + 1, page: index + 1))
-        try G3P.encode(rgb565: render(screen)).write(to: url, options: .atomic)
-        files.append(url)
+    }
+    let digits = screens.count > 99 ? 3 : 2
+    let parts = CalculatorLayout.parts(screens.map(\.count))
+    var files: [URL] = []
+    for (index, questions) in parts.enumerated() {
+      let target = parts.count == 1 ? folder : folder.appendingPathComponent("PART\(index + 1)", isDirectory: true)
+      try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+      for question in questions {
+        for (page, screen) in screens[question].enumerated() {
+          let url = target.appendingPathComponent(CalculatorLayout.fileName(question: question + 1, page: page + 1, digits: digits))
+          try G3P.encode(rgb565: render(screen)).write(to: url, options: .atomic)
+          files.append(url)
+        }
       }
     }
     return files

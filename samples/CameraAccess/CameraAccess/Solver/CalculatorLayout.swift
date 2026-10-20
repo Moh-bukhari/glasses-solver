@@ -73,18 +73,31 @@ enum CalculatorLayout {
   }
 
   /// File names the calculator shows in full (8.3) and lists in packet order: "Q01_01", "Q01_02", "Q02_01", ...
-  /// (question number in the packet, then the page of that question).
-  static func fileName(question: Int, page: Int) -> String {
-    func two(_ n: Int) -> String { n < 10 ? "0\(n)" : String(n) }
-    return "Q" + two(question) + "_" + two(page) + ".g3p"
+  /// (question number in the packet, then the page of that question). `digits` is 3 for packets of 100+ subquestions,
+  /// so "Q100" never sorts before "Q11".
+  static func fileName(question: Int, page: Int, digits: Int = 2) -> String {
+    func padded(_ n: Int, _ width: Int) -> String { String(repeating: "0", count: max(0, width - String(n).count)) + String(n) }
+    return "Q" + padded(question, digits) + "_" + padded(page, 2) + ".g3p"
   }
-  /// The calculator folder for a packet: "SOL" + month and day + a letter, at most 8 characters (e.g. "SOL1020A"), not
-  /// used by another packet.
+  /// The calculator folder for a packet, at most 8 characters and never one issued before (`taken`): "SOL" + month and
+  /// day + a letter (e.g. "SOL1020A"), then "S" + month and day + a number once a day's 26 letters are used.
   static func folderName(date: Date, taken: Set<String>, timeZone: TimeZone = .current) -> String {
     var calendar = Calendar(identifier: .gregorian); calendar.timeZone = timeZone
     let parts = calendar.dateComponents([.month, .day], from: date)
-    let base = String(format: "SOL%02d%02d", parts.month ?? 1, parts.day ?? 1)
-    for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" where !taken.contains(base + String(letter)) { return base + String(letter) }
-    return base + "Z"
+    let day = String(format: "%02d%02d", parts.month ?? 1, parts.day ?? 1)
+    for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" where !taken.contains("SOL" + day + String(letter)) { return "SOL" + day + String(letter) }
+    for number in 0..<1000 where !taken.contains("S" + day + String(format: "%03d", number)) { return "S" + day + String(format: "%03d", number) }
+    return "S" + day + "999"
+  }
+  /// The calculator lists at most 200 files per folder. Questions (with all their pages) are grouped into parts of at
+  /// most `limit` files, in order; a question is never split between parts.
+  static func parts(_ pageCounts: [Int], limit: Int = 200) -> [[Int]] {
+    var parts: [[Int]] = [], current: [Int] = [], files = 0
+    for (question, count) in pageCounts.enumerated() {
+      if files + count > limit, !current.isEmpty { parts.append(current); current = []; files = 0 }
+      current.append(question); files += count
+    }
+    if !current.isEmpty { parts.append(current) }
+    return parts
   }
 }

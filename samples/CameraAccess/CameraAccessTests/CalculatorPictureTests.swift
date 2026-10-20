@@ -90,6 +90,17 @@ final class CalculatorPictureTests: XCTestCase {
     let date = Date(timeIntervalSince1970: 1_792_000_000), utc = TimeZone(identifier: "UTC")!
     XCTAssertEqual(CalculatorLayout.folderName(date: date, taken: [], timeZone: utc), "SOL1014A")
     XCTAssertEqual(CalculatorLayout.folderName(date: date, taken: ["SOL1014A"], timeZone: utc), "SOL1014B")
+    let allLetters = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZ".map { "SOL1014" + String($0) })
+    XCTAssertEqual(CalculatorLayout.folderName(date: date, taken: allLetters, timeZone: utc), "S1014000",
+      "After 26 packets in a day the name is still new and 8 characters.")
+    let big = [99, 100, 101].map { CalculatorLayout.fileName(question: $0, page: 1, digits: 3) }
+    XCTAssertEqual(big, ["Q099_01.g3p", "Q100_01.g3p", "Q101_01.g3p"]); XCTAssertEqual(big, big.sorted())
+  }
+  func testHugePacketsAreSplitIntoPartsOfAtMost200Pictures() {
+    XCTAssertEqual(CalculatorLayout.parts([1, 2, 3]), [[0, 1, 2]])
+    let parts = CalculatorLayout.parts(Array(repeating: 3, count: 100)) // 300 pictures
+    XCTAssertEqual(parts.map(\.count), [66, 34], "66 questions x 3 pages = 198; a question is never split.")
+    XCTAssertEqual(parts.flatMap { $0 }, Array(0..<100))
   }
 
   #if canImport(UIKit)

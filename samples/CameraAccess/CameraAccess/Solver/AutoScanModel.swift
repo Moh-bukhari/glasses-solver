@@ -5,7 +5,7 @@ import UIKit
 @Observable
 @MainActor
 final class AutoScanModel {
-  enum Phase: String { case idle, connecting, seeking, awaitingNext, capturing, checking, solving, saving, finished, failed }
+  enum Phase: String { case idle, connecting, seeking, awaitingNext, capturing, checking, importing, solving, saving, finished, failed }
   /// Per-page solving status shown on the page queue.
   enum PageState: Equatable { case waiting, queued, solving, solved, failed(String) }
   static let maxPages = 30
@@ -58,7 +58,8 @@ final class AutoScanModel {
   var hasOpenPhotos: Bool {
     !openPhotos.isEmpty || !laterPhotos.isEmpty || !heldPhotos.isEmpty || !photoEvents.isEmpty || !intake.isEmpty
   }
-  var isRunning: Bool { [.connecting, .seeking, .awaitingNext, .capturing, .checking, .solving, .saving].contains(phase) }
+  /// `importing` (picked photos being added) is running but not collecting: leaving the screen never stops it.
+  var isRunning: Bool { [.connecting, .seeking, .awaitingNext, .capturing, .checking, .importing, .solving, .saving].contains(phase) }
   var isCollecting: Bool { [.seeking, .awaitingNext, .capturing, .checking].contains(phase) }
   var canFinish: Bool {
     (!pages.isEmpty || hasOpenPhotos) && !packetSolved && [.idle, .failed, .seeking, .awaitingNext].contains(phase)
@@ -296,14 +297,20 @@ final class AutoScanModel {
   /// (orientation, JPEG); the user chose the clearest ones, so no on-device quality gate can reject them. Pages are solved
   /// when the user taps Solve.
   func importPhotos(_ photos: [Data]) {
-    guard !isRunning, !photos.isEmpty else { return }
+    guard !photos.isEmpty else { return }
+    guard !isRunning else {
+      guide = phase == .importing ? "Still adding the last photos. Pick more when they are in."
+        : "Wait until this packet is solved (or stop it), then add photos."
+      return
+    }
     if packetSolved { clearPacket() }
     let room = Self.maxPages - pages.count
     guard room > 0 else { guide = "\(Self.maxPages) pages saved. Solve or start a new packet first."; return }
     begin(imported: true); replacing = nil; handsFree = false; fixing = false; photoScan = false
     refreshSolveSetup()
     let chosen = Array(photos.prefix(room)), id = runID, analyzer = self.analyzer
-    phase = .checking; progress = 0; guide = "Adding \(chosen.count) photo\(chosen.count == 1 ? "" : "s")…"
+    phase = .importing; progress = 0; guide = "Adding \(chosen.count) photo\(chosen.count == 1 ? "" : "s")…"
+    beginBackgroundWork() // finishes even if the phone locks or the app leaves the screen
     worker = Task { [weak self] in
       var added = 0, failed = 0
       for data in chosen {
@@ -323,6 +330,7 @@ final class AutoScanModel {
       let solver = self.solver, urls = Set(self.pages.flatMap(\.frames))
       Task { await solver.forget(keeping: urls) }
       self.phase = .idle; self.restoreIdleTimer(); self.progress = 0
+      if self.jobs.isEmpty { self.endBackgroundWork() }
       var message = "\(self.pages.count) page\(self.pages.count == 1 ? "" : "s") ready. Tap Solve, or add more photos."
       if failed > 0 { message = "\(failed) photo\(failed == 1 ? "" : "s") could not be read and \(failed == 1 ? "was" : "were") skipped. " + message }
       if photos.count > chosen.count { message += " Only the first \(chosen.count) were added (limit \(Self.maxPages) pages)." }
@@ -915,7 +923,8 @@ final class AutoScanModel {
       if !guide.hasPrefix("Got it") { guide = "Checking the photo for clear writing…" }
       let photo = try await analyzer.prepare(data)
       try Task.checkCancellation(); guard runID == id else { restart?.cancel(); return }
-      if !photo.sample.acceptable || !photo.sample.closeEnough {
+      // A photo picked on the phone is the user's choice (2.7); only glasses stills are judged on the device.
+      if !imported && (!photo.sample.acceptable || !photo.sample.closeEnough) {
         let reason = photo.sample.issue ?? "Move closer so the small writing is readable."
         if finishRequested, !pages.isEmpty {
           // The wearer already asked to finish: solve the saved pages instead of waiting on a retake.

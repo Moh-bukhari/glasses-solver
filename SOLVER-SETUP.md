@@ -1,7 +1,7 @@
 # Glasses Solver 2.7: pick your photos, get every solution as a PDF and as fx-CG50 pictures
 
 1. Tap **Choose question photos** and pick the clearest photo of each page of questions, in order (up to 30). Each photo becomes a page.
-2. Tap **Solve**. With both API keys saved, Claude Opus 5.5 and GPT-6 Astra each solve every page, and Claude compares the two against your photo and writes the final answer. With one key, that provider solves.
+2. Tap **Solve**. With both API keys saved, Claude Opus 5.5 and GPT-6 Astra each solve every page, and Claude compares the two against your photo and writes the final answer. With one key, that provider solves. If one key stops working (expired, no credit), the other one solves the rest and the app tells you.
 3. When it's done, the PDF opens. Everything is in one folder: **Files › On My iPhone › Glasses Solver › Solutions › <date, time and title>**:
    - `Solutions.pdf`: full worked solutions with typeset math, and your photos.
    - `SOL1020A` (for example): the **calculator folder**. It has one picture per subquestion, showing only the short working and the answer, sized for the fx-CG50 screen so nothing needs zooming. Each picture is headed with its question, e.g. **Q3(b)**, and says **page 1/2** when one subquestion needs more than one picture. Files are named `Q01_01.g3p`, `Q01_02.g3p`, `Q02_01.g3p`, … in packet order.
@@ -10,7 +10,7 @@
 
 1. Get the calculator folder to your computer: in the PDF viewer tap **Calculator pictures (SOL…)** and send the zip (AirDrop to a Mac, a cloud drive, email), or copy the folder from the Files app. Unzip it.
 2. Connect the calculator with its USB cable. On the calculator press **F1 (USB Flash)**. It appears as a drive.
-3. Copy the whole `SOL…` folder to the top level of the calculator drive. Never put it in `@MainMem`, and never format the drive.
+3. Copy the whole `SOL…` folder to the top level of the calculator drive. Never put it in `@MainMem`, and never format the drive. (A very large packet, over 200 pictures, has `PART1`, `PART2`, … inside, because the calculator lists at most 200 files per folder.)
 4. Eject the drive ("Safely Remove Hardware" on Windows), wait for **Complete!** on the calculator, press EXIT, unplug.
 
 An iPhone with USB-C may be able to open the calculator drive directly in the Files app; that's untested.

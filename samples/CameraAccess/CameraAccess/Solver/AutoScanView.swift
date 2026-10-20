@@ -13,6 +13,8 @@ struct AutoScanView: View {
   @State private var selection: PhotosPickerItem?
   /// Manual import: the question photos picked, in the order picked.
   @State private var selections: [PhotosPickerItem] = []
+  /// Picked photos are being read from the library (iCloud originals can take a while): nothing else may start.
+  @State private var loadingPhotos = false
   @State private var importError: String?
   @State private var replacingPhoto: Int?
   @State private var confirmNewBatch = false
@@ -51,7 +53,9 @@ struct AutoScanView: View {
             Image(systemName: phaseIcon).foregroundStyle(model.phase == .failed ? .orange : .mint)
             Text(model.guide).font(.headline)
           }.frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("scan_status")
-          if model.phase == .seeking || model.phase == .capturing || model.phase == .solving {
+          if loadingPhotos {
+            ProgressView("Loading the photos you picked…").frame(maxWidth: .infinity)
+          } else if model.phase == .seeking || model.phase == .capturing || model.phase == .solving || model.phase == .importing {
             ProgressView(value: model.progress).tint(.mint)
           } else if model.isRunning && model.phase != .awaitingNext { ProgressView().frame(maxWidth: .infinity) }
           if let importError { Text(importError).foregroundStyle(.red) }
@@ -95,8 +99,10 @@ struct AutoScanView: View {
       .task(id: selections) {
         guard !selections.isEmpty else { return }
         let items = selections
-        defer { selections = [] }
-        importError = nil
+        // Clear only this pick: a newer pick made meanwhile must not be wiped (that would cancel it too).
+        defer { if selections == items { selections = [] } }
+        importError = nil; loadingPhotos = true
+        defer { loadingPhotos = false }
         var photos: [Data] = []
         for item in items {
           if let data = try? await item.loadTransferable(type: Data.self) { photos.append(data) }
@@ -138,7 +144,7 @@ struct AutoScanView: View {
   }
 
   @ViewBuilder private var primaryControls: some View {
-    if model.canFinish {
+    if model.canFinish, !loadingPhotos {
       Button {
         applySettings(); model.finishScanning()
         if model.needsKey { settings = true }
@@ -160,10 +166,11 @@ struct AutoScanView: View {
           .buttonStyle(.bordered)
       }
     } else {
-      if model.pages.count < AutoScanModel.maxPages {
-        let startsNew = model.pages.isEmpty || model.packetSolved
-        PhotosPicker(selection: $selections, maxSelectionCount: AutoScanModel.maxPages - model.pages.count,
-                     selectionBehavior: .ordered, matching: .images) {
+      // After a PDF, picking photos starts a new packet, so the old packet's pages don't count.
+      let startsNew = model.pages.isEmpty || model.packetSolved
+      let room = startsNew ? AutoScanModel.maxPages : AutoScanModel.maxPages - model.pages.count
+      if room > 0, !loadingPhotos {
+        PhotosPicker(selection: $selections, maxSelectionCount: room, selectionBehavior: .ordered, matching: .images) {
           Label(startsNew ? "Choose question photos" : "Add more photos",
                 systemImage: "photo.on.rectangle.angled")
             .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)

@@ -402,18 +402,20 @@ actor PageSolver: PageSolving {
   func solve(_ job: PageJob, configuration: SolverConfiguration,
              progress: @escaping @Sendable (String) -> Void) async throws -> PageResult {
     try configuration.validate()
-    // One provider at a time: if its key, credit or spend limit fails, the other saved key solves for the session.
+    // If a provider's key, credit or spend limit fails, the other saved key solves for the session, also in Both
+    // mode (a dead key must not fail every page; the notice says so).
     var configuration = configuration
-    if configuration.mode != .both, failedAccounts.contains(configuration.lead.provider),
-      let other = configuration.alternative(to: configuration.lead.provider) {
+    let inUse = [configuration.lead.provider] + (configuration.peer.map { [$0.provider] } ?? [])
+    if let dead = inUse.first(where: failedAccounts.contains), let other = configuration.alternative(to: dead),
+      !failedAccounts.contains(other) {
       configuration.mode = other == .claude ? .claude : .openAI
     }
     do { return try await solveOnce(job, configuration: configuration, progress: progress) }
-    catch let error as AIServiceError where error.isAccountProblem && configuration.mode != .both {
-      let failed = configuration.lead.provider
-      guard let other = configuration.alternative(to: failed) else { throw error }
+    catch let error as AIServiceError where error.isAccountProblem {
+      guard case .http(let failed, _, _, _) = error, let other = configuration.alternative(to: failed),
+        !failedAccounts.contains(other) else { throw error }
       failedAccounts.insert(failed); configuration.mode = other == .claude ? .claude : .openAI
-      progress("\(job.title): \(failed.name) can't be used (\(error.localizedDescription)) Solving with \(other.name) instead.")
+      progress("\(job.title): \(failed.name) can't be used (\(error.localizedDescription)) Solving with \(other.name) only.")
       return try await solveOnce(job, configuration: configuration, progress: progress)
     }
   }
