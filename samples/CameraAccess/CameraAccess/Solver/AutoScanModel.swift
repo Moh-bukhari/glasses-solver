@@ -1696,6 +1696,9 @@ final class AutoScanModel {
         let review = solution.problems.contains { $0.reviewNote?.hasPrefix("NEEDS REVIEW") == true }
         guide = review ? "Your PDF is ready. Check items marked NEEDS REVIEW." : "Your PDF is ready."
         guide += " Files › On My iPhone › Glasses Solver › Solutions › \(saved.pdf.deletingLastPathComponent().lastPathComponent)."
+        if let calculator = saved.calculator {
+          guide += " Calculator pictures: copy the folder \(calculator.lastPathComponent) to your fx-CG50."
+        }
         if !missing.isEmpty { guide += " Left out unreadable: \(missing.joined(separator: ", "))." }
         // Keep the pages and cached answers so one page can be retaken and the PDF rebuilt quickly.
         // The next Start (or a new photo) begins a fresh packet; the PDF folder holds every original.

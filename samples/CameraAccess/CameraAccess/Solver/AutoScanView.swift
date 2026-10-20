@@ -364,6 +364,8 @@ private struct ContentOutline: Shape {
 struct SolutionViewer: View {
   let solution: SavedSolution
   @Environment(\.dismiss) private var dismiss
+  /// The calculator folder, zipped for the share sheet once the viewer opens.
+  @State private var calculatorZip: URL?
   var body: some View {
     NavigationStack {
       PDFPreview(url: solution.pdf).ignoresSafeArea(edges: .bottom)
@@ -371,6 +373,17 @@ struct SolutionViewer: View {
         .toolbar {
           ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
           ToolbarItem(placement: .topBarTrailing) { ShareLink(item: solution.pdf) { Image(systemName: "square.and.arrow.up") } }
+          if let calculatorZip {
+            ToolbarItem(placement: .bottomBar) {
+              ShareLink(item: calculatorZip) {
+                Label("Calculator pictures (\(solution.calculator?.lastPathComponent ?? "folder"))", systemImage: "square.grid.2x2")
+              }
+            }
+          }
+        }
+        .task {
+          guard let folder = solution.calculator else { return }
+          calculatorZip = try? await Task.detached(priority: .userInitiated) { try SolutionStore.zip(folder) }.value
         }
     }
   }

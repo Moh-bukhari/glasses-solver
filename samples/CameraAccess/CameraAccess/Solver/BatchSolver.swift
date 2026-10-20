@@ -326,7 +326,7 @@ struct SolverClient: AITransport {
     }
     func array(_ items: [String: Any]) -> [String: Any] { ["type": "array", "items": items] }
     return object(["readable": ["type": "boolean"], "retake": string, "title": string, "checklist": array(string),
-      "solutions": array(object(["label": string, "problem": string, "steps": array(string), "answer": string, "check": string,
+      "solutions": array(object(["label": string, "problem": string, "steps": array(string), "answer": string, "brief": array(string), "check": string,
         "status": ["type": "string", "enum": ["solved", "needs_review", "insufficient_information"]],
         "reviewNote": string, "sourcePages": array(integer)])),
       "skipped": array(object(["label": string, "reason": string]))])
@@ -350,6 +350,13 @@ struct SolverClient: AITransport {
   $U_0 = 4.00\\ \\mathrm{m/s}$, $a = 1.20\\ \\mathrm{s^{-1}}$. Never write keyboard math such as x^2, s^-1, sqrt(x) or a/b outside
   LaTeX. Steps form a full worked solution, as a textbook would print it: state the governing equation, substitute the
   values, simplify and give the result, each as displayed math with a short sentence of explanation.
+  brief: the same solution as a quick student would write it on a calculator screen: only the working needed to reach the
+  answer (the governing equation, the substitution with numbers, key intermediate results), no sentences or
+  explanations, 1 to 6 lines, each at most about 36 characters. Do not repeat the final answer; it is shown separately.
+  Write brief in plain Unicode math, never LaTeX: e.g. "v = √(2gh)", "= √(2·9.81·3.0)", "x² + 3x − 4 = 0",
+  "(x + 4)(x − 1) = 0", "F = ma = 2.0 × 4.5". Fractions as a/b with parentheses where needed. For multiple choice,
+  brief is the one or two lines that decide the choice. Give answer itself as concisely as possible (value with units,
+  or the choice letter and value).
   No HTML, Markdown tables or code fences.
   Return only the requested JSON. Do not shorten the required solution list to save tokens.
   """

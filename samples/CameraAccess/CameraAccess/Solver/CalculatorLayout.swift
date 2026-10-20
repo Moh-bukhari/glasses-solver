@@ -1,17 +1,18 @@
 import Foundation
 
-/// Worked solutions laid out as fx-CG50 screens: fixed-size pages of wrapped lines that are read without zooming.
-/// Pure layout; `CalculatorPictures` measures and draws the text and `G3P` writes the files.
+/// Solutions laid out as fx-CG50 pictures: one subquestion per picture, only its short working and its answer, in
+/// lines that fit the 384x192 screen without zooming. Pure layout; `CalculatorPictures` measures and draws the text and
+/// `G3P` writes the files.
 enum CalculatorLayout {
-  enum Style: Sendable, Equatable { case heading, answer, body, label }
+  enum Style: Sendable, Equatable { case answer, body, note }
   struct Line: Sendable, Equatable {
     let text: String
     let style: Style
   }
-  /// One calculator screen of one question (or of the answers summary).
+  /// One picture: which question it is, its page within that question ("page 1/3", nil when it is the only one), lines.
   struct Screen: Sendable, Equatable {
-    /// Shown at the top of the screen, e.g. "3(b)  2/4".
-    let header: String
+    let title: String
+    let page: String?
     let lines: [Line]
   }
   /// How much fits: `width` measures a line of text in pixels for a style; `maxWidth` is the text column.
@@ -19,6 +20,23 @@ enum CalculatorLayout {
     var linesPerScreen: Int
     var maxWidth: Double
     var width: (String, Style) -> Double
+  }
+
+  /// The pictures of one subquestion: the short working, then the answer. A flagged answer says to check the PDF.
+  static func screens(label: String, brief: [String], answer: String, unsure: Bool, metrics: Metrics) -> [Screen] {
+    var lines: [Line] = []
+    for step in brief where !step.trimmingCharacters(in: .whitespaces).isEmpty {
+      lines += wrap(step, style: .body, metrics: metrics, indent: "  ").map { Line(text: $0, style: .body) }
+    }
+    lines += wrap("Ans: " + answer, style: .answer, metrics: metrics, indent: "  ").map { Line(text: $0, style: .answer) }
+    if unsure { lines.append(Line(text: "Unsure: check the PDF", style: .note)) }
+    return paginate(lines, title: title(for: label), metrics: metrics)
+  }
+
+  /// "3(b)" is shown as "Q3(b)"; labels that already say what they are ("Q4", "Problem 2", "Figure 1") stay as printed.
+  static func title(for label: String) -> String {
+    let trimmed = label.trimmingCharacters(in: .whitespaces)
+    return trimmed.first?.isNumber == true ? "Q" + trimmed : trimmed
   }
 
   /// Greedy word wrap. A word wider than the line is broken between characters, so nothing is ever cut off.
@@ -40,42 +58,33 @@ enum CalculatorLayout {
         }
         line += rest
       }
-      if !line.trimmingCharacters(in: .whitespaces).isEmpty || lines.isEmpty { lines.append(line) }
+      if !line.trimmingCharacters(in: .whitespaces).isEmpty { lines.append(line) }
     }
     return lines
   }
 
-  /// The screens of one solved question: the answer first (what is looked up), then the problem, the steps and the check.
-  /// Every screen repeats the question's label and its position, e.g. "3(b)  2/4".
-  static func screens(label: String, problem: String, steps: [String], answer: String, check: String, note: String?,
-                      metrics: Metrics) -> [Screen] {
-    var lines: [Line] = []
-    func add(_ text: String, _ style: Style, indent: String = "") {
-      lines += wrap(text, style: style, metrics: metrics, indent: indent).map { Line(text: $0, style: style) }
-    }
-    add("Answer: " + answer, .answer)
-    if let note, !note.trimmingCharacters(in: .whitespaces).isEmpty { add(note, .label) }
-    add(problem, .body)
-    for (index, step) in steps.enumerated() { add("\(index + 1). " + step, .body, indent: "   ") }
-    if !check.trimmingCharacters(in: .whitespaces).isEmpty && check != "—" { add("Check: " + check, .label) }
-    return paginate(lines, title: label, metrics: metrics)
-  }
-
-  /// Every question's final answer, a few per screen, for looking answers up quickly.
-  static func summary(_ answers: [(label: String, answer: String)], metrics: Metrics) -> [Screen] {
-    var lines: [Line] = []
-    for item in answers {
-      lines += wrap(item.label + ": " + item.answer, style: .body, metrics: metrics, indent: "   ").map { Line(text: $0, style: .body) }
-    }
-    return paginate(lines, title: "Answers", metrics: metrics)
-  }
-
-  /// Splits lines into screens; a screen never starts with a blank continuation and always has at least one line.
+  /// Splits lines into pictures of `linesPerScreen` lines; several pictures of one question are numbered "page 1/3".
   static func paginate(_ lines: [Line], title: String, metrics: Metrics) -> [Screen] {
     let size = max(1, metrics.linesPerScreen)
     let chunks = stride(from: 0, to: max(lines.count, 1), by: size).map { Array(lines[$0..<min($0 + size, lines.count)]) }
     return chunks.enumerated().map { index, chunk in
-      Screen(header: chunks.count == 1 ? title : "\(title)  \(index + 1)/\(chunks.count)", lines: chunk)
+      Screen(title: title, page: chunks.count == 1 ? nil : "page \(index + 1)/\(chunks.count)", lines: chunk)
     }
+  }
+
+  /// File names the calculator shows in full (8.3) and lists in packet order: "Q01_01", "Q01_02", "Q02_01", ...
+  /// (question number in the packet, then the page of that question).
+  static func fileName(question: Int, page: Int) -> String {
+    func two(_ n: Int) -> String { n < 10 ? "0\(n)" : String(n) }
+    return "Q" + two(question) + "_" + two(page) + ".g3p"
+  }
+  /// The calculator folder for a packet: "SOL" + month and day + a letter, at most 8 characters (e.g. "SOL1020A"), not
+  /// used by another packet.
+  static func folderName(date: Date, taken: Set<String>, timeZone: TimeZone = .current) -> String {
+    var calendar = Calendar(identifier: .gregorian); calendar.timeZone = timeZone
+    let parts = calendar.dateComponents([.month, .day], from: date)
+    let base = String(format: "SOL%02d%02d", parts.month ?? 1, parts.day ?? 1)
+    for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" where !taken.contains(base + String(letter)) { return base + String(letter) }
+    return base + "Z"
   }
 }

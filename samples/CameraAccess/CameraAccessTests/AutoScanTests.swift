@@ -1434,6 +1434,24 @@ final class AutoScanTests: XCTestCase {
     XCTAssertTrue(saver.lastPage?.problems.contains { $0.problem.contains("could not be read") } == true)
     XCTAssertTrue(model.guide.contains("Left out unreadable: Page 1"), model.guide)
   }
+  func testPickedPhotosBecomePagesInTheOrderPickedAndSolveTogether() async throws {
+    let camera = FakeScanCamera(data: Data()), saver = FakeSolutionSaver(), solver = FakePageSolver()
+    let model = makeModel(camera, FakePageAnalyzer(sample: goodSample()), solver, saver, solveWhileScanning: false)
+    model.importPhotos([Data("page-a".utf8), Data("page-b".utf8), Data("page-c".utf8)])
+    await waitUntil { model.phase == .idle && model.pages.count == 3 }
+    XCTAssertEqual(model.pages.count, 3)
+    XCTAssertEqual(try model.pages.map { String(decoding: try Data(contentsOf: $0.url), as: UTF8.self) }, ["page-a", "page-b", "page-c"])
+    XCTAssertTrue(model.guide.hasPrefix("3 pages ready"), model.guide)
+    XCTAssertEqual(camera.starts, 0, "Importing needs no glasses.")
+    XCTAssertTrue(model.canFinish)
+    model.finishScanning()
+    await waitUntil { model.phase == .finished }
+    XCTAssertEqual(saver.frameCounts, [1, 1, 1])
+    // After the PDF, picking photos starts a new packet.
+    model.importPhotos([Data("next".utf8)])
+    await waitUntil { model.phase == .idle && model.pages.count == 1 }
+    XCTAssertEqual(model.pages.count, 1); XCTAssertFalse(model.packetSolved)
+  }
   func testSolutionFoldersAreNamedByDateAndTitle() {
     let date = Date(timeIntervalSince1970: 1_792_000_000), utc = TimeZone(identifier: "UTC")!
     XCTAssertEqual(SolutionFolder.name(title: "Physics: HW 3/4\nForces.", date: date, timeZone: utc),

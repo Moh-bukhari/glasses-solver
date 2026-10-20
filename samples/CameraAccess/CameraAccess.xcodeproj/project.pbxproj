@@ -15,6 +15,9 @@
 		BA7C00000000000000000092 /* MathText.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C00000000000000000091; };
 		BA7C000000000000000000B2 /* ButtonPhotos.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C000000000000000000B1; };
 		BA7C000000000000000000C2 /* PhotoLibraryInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C000000000000000000C1; };
+		BA7C000000000000000000D2 /* G3P.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C000000000000000000D1; };
+		BA7C000000000000000000E2 /* CalculatorLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C000000000000000000E1; };
+		BA7C000000000000000000F2 /* CalculatorPictures.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C000000000000000000F1; };
 		BA7C00000000000000000062 /* MWDATInputs in Frameworks */ = {isa = PBXBuildFile; productRef = BA7C00000000000000000061 /* MWDATInputs */; };
 		BA7C000000000000000000A3 /* SwiftMath in Frameworks */ = {isa = PBXBuildFile; productRef = BA7C000000000000000000A2 /* SwiftMath */; };
 		BA7C00000000000000000022 /* ScanDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7C00000000000000000021; };
@@ -97,6 +100,9 @@
 		BA7C00000000000000000091 /* MathText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/MathText.swift; sourceTree = "<group>"; };
 		BA7C000000000000000000B1 /* ButtonPhotos.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/ButtonPhotos.swift; sourceTree = "<group>"; };
 		BA7C000000000000000000C1 /* PhotoLibraryInbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/PhotoLibraryInbox.swift; sourceTree = "<group>"; };
+		BA7C000000000000000000D1 /* G3P.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/G3P.swift; sourceTree = "<group>"; };
+		BA7C000000000000000000E1 /* CalculatorLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/CalculatorLayout.swift; sourceTree = "<group>"; };
+		BA7C000000000000000000F1 /* CalculatorPictures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/CalculatorPictures.swift; sourceTree = "<group>"; };
 		BA7C00000000000000000021 /* ScanDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/ScanDraft.swift; sourceTree = "<group>"; };
 		BA7C00000000000000000011 /* BatchSolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/BatchSolver.swift; sourceTree = "<group>"; };
 		C81611D51712FF60636F7C38 /* SolverService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Solver/SolverService.swift; sourceTree = "<group>"; };
@@ -254,6 +260,9 @@
 				BA7C00000000000000000091 /* MathText.swift */,
 				BA7C000000000000000000B1 /* ButtonPhotos.swift */,
 				BA7C000000000000000000C1 /* PhotoLibraryInbox.swift */,
+				BA7C000000000000000000D1 /* G3P.swift */,
+				BA7C000000000000000000E1 /* CalculatorLayout.swift */,
+				BA7C000000000000000000F1 /* CalculatorPictures.swift */,
 				505C167EBC5FA348132A8B77 /* AutoScanModel.swift */,
 				F3C17C4B548B6BF3A1D3025D /* AutoScanView.swift */,
 				99627FE9E0D573A0526D4893 /* ScanQuality.swift */,
@@ -463,6 +472,9 @@
 				BA7C00000000000000000092 /* MathText.swift in Sources */,
 				BA7C000000000000000000B2 /* ButtonPhotos.swift in Sources */,
 				BA7C000000000000000000C2 /* PhotoLibraryInbox.swift in Sources */,
+				BA7C000000000000000000D2 /* G3P.swift in Sources */,
+				BA7C000000000000000000E2 /* CalculatorLayout.swift in Sources */,
+				BA7C000000000000000000F2 /* CalculatorPictures.swift in Sources */,
 				7A8F8F8849FAFF6694802945 /* AutoScanModel.swift in Sources */,
 				69C00752900F44FD71C9AFD5 /* AutoScanView.swift in Sources */,
 				A0EADB51FEB0A4BBC4CBC386 /* ScanQuality.swift in Sources */,
@@ -533,7 +545,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = CameraAccess/CameraAccess.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 13;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
@@ -544,7 +556,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.6;
+				MARKETING_VERSION = 2.7;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolver;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;
@@ -560,7 +572,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = CameraAccess/CameraAccess.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 13;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
@@ -570,7 +582,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.6;
+				MARKETING_VERSION = 2.7;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolver;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;
@@ -584,13 +596,13 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 13;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 2.6;
+				MARKETING_VERSION = 2.7;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolverUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -610,13 +622,13 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 13;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 2.6;
+				MARKETING_VERSION = 2.7;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolverUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -636,13 +648,13 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 13;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 2.6;
+				MARKETING_VERSION = 2.7;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolverTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -665,13 +677,13 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 13;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 2.6;
+				MARKETING_VERSION = 2.7;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mohbukhari.glassessolverTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;

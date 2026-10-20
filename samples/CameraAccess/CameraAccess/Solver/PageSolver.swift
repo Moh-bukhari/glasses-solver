@@ -71,7 +71,7 @@ enum PagePlan {
         problems.append(SolvedProblem(problem: item.problem, steps: steps.isEmpty ? ["See the review note."] : steps,
           answer: filled(item.answer), check: filled(item.check),
           label: item.label, sourcePages: sources.isEmpty ? [page.number] : sources,
-          reviewNote: (flagged ? "NEEDS REVIEW: " : "") + item.reviewNote))
+          reviewNote: (flagged ? "NEEDS REVIEW: " : "") + item.reviewNote, brief: item.brief))
       }
       previous = (page.number, items)
     }
@@ -99,6 +99,19 @@ enum PagePlan {
 struct PageSolutionItem: Codable, Sendable {
   let label: String; let problem: String; let steps: [String]; let answer: String; let check: String
   let status: String; let reviewNote: String; let sourcePages: [Int]
+  /// The short working for the calculator pictures, in plain Unicode math (2.7).
+  var brief: [String] = []
+}
+extension PageSolutionItem {
+  /// Answers cached before 2.7 have no `brief`.
+  init(from decoder: any Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.init(label: try c.decode(String.self, forKey: .label), problem: try c.decode(String.self, forKey: .problem),
+      steps: try c.decode([String].self, forKey: .steps), answer: try c.decode(String.self, forKey: .answer),
+      check: try c.decode(String.self, forKey: .check), status: try c.decode(String.self, forKey: .status),
+      reviewNote: try c.decode(String.self, forKey: .reviewNote), sourcePages: try c.decode([Int].self, forKey: .sourcePages),
+      brief: try c.decodeIfPresent([String].self, forKey: .brief) ?? [])
+  }
 }
 struct SkippedItem: Codable, Sendable { let label: String; let reason: String }
 struct PageResult: Codable, Sendable {
@@ -116,7 +129,8 @@ struct PageResult: Codable, Sendable {
     guard offset != 0 else { return self }
     return PageResult(readable: readable, retake: retake, title: title, checklist: checklist,
       solutions: solutions.map { PageSolutionItem(label: $0.label, problem: $0.problem, steps: $0.steps, answer: $0.answer,
-        check: $0.check, status: $0.status, reviewNote: $0.reviewNote, sourcePages: $0.sourcePages.map { $0 + offset }) },
+        check: $0.check, status: $0.status, reviewNote: $0.reviewNote, sourcePages: $0.sourcePages.map { $0 + offset },
+        brief: $0.brief) },
       skipped: skipped)
   }
   static func normalized(_ label: String) -> String { label.lowercased().filter { $0.isLetter || $0.isNumber } }

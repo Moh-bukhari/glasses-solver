@@ -1,3 +1,29 @@
+# Glasses Solver 2.7: pick your photos, get every solution as a PDF and as fx-CG50 pictures
+
+1. Tap **Choose question photos** and pick the clearest photo of each page of questions, in order (up to 30). Each photo becomes a page.
+2. Tap **Solve**. With both API keys saved, Claude Opus 5.5 and GPT-6 Astra each solve every page, and Claude compares the two against your photo and writes the final answer. With one key, that provider solves.
+3. When it's done, the PDF opens. Everything is in one folder: **Files › On My iPhone › Glasses Solver › Solutions › <date, time and title>**:
+   - `Solutions.pdf`: full worked solutions with typeset math, and your photos.
+   - `SOL1020A` (for example): the **calculator folder**. It has one picture per subquestion, showing only the short working and the answer, sized for the fx-CG50 screen so nothing needs zooming. Each picture is headed with its question, e.g. **Q3(b)**, and says **page 1/2** when one subquestion needs more than one picture. Files are named `Q01_01.g3p`, `Q01_02.g3p`, `Q02_01.g3p`, … in packet order.
+
+## Copy the pictures to the fx-CG50
+
+1. Get the calculator folder to your computer: in the PDF viewer tap **Calculator pictures (SOL…)** and send the zip (AirDrop to a Mac, a cloud drive, email), or copy the folder from the Files app. Unzip it.
+2. Connect the calculator with its USB cable. On the calculator press **F1 (USB Flash)**. It appears as a drive.
+3. Copy the whole `SOL…` folder to the top level of the calculator drive. Never put it in `@MainMem`, and never format the drive.
+4. Eject the drive ("Safely Remove Hardware" on Windows), wait for **Complete!** on the calculator, press EXIT, unplug.
+
+An iPhone with USB-C may be able to open the calculator drive directly in the Files app; that's untested.
+
+## View the pictures on the calculator
+
+- **Fastest:** MENU › **Memory** › **F2 (STRGMEM)** › open the `SOL…` folder › highlight `Q01_01` › press the **right arrow** (or F5 DETAIL) and the right arrow again for the picture. Then **up/down** steps to the previous or next picture. Left arrow or EXIT goes back.
+- **Picture Plot:** open it from the Main Menu, open the folder and a picture with F1 (OPEN). First turn the axes off: SHIFT+MENU (SET UP), Axes Off, Label Off, Grid Off. To open the next picture: OPTN › F1 (FILE) › F1 (OPEN).
+- The pictures are 384x192, the area below the calculator's status bar. None of these viewers work while the calculator is in Examination Mode.
+- Not yet checked on a real fx-CG50: try one folder first and tell me if a picture does not open or looks wrong.
+
+Glasses scanning (below) is still in the app as **Scan with glasses instead**.
+
 # Glasses Solver 2.6: take each page with the capture button, checked as you go, one folder per packet
 
 The glasses' video is too blurry for small print, but the photos you take with the **capture button** are sharp. In 2.6 you photograph each page yourself. The Meta AI app imports every photo into your iPhone's Photos; Glasses Solver picks it up right away, checks that every question on the page can be read, and tells you through the glasses: "Page 1 is clear. Take page 2." or what to photograph again. Each page is solved as soon as the next one is saved, so the PDF is ready moments after you finish. Everything for one packet goes into one folder in the Files app.

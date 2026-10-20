@@ -12,6 +12,8 @@ struct SolvedProblem: Codable, Sendable {
   var label: String? = nil
   var sourcePages: [Int]? = nil
   var reviewNote: String? = nil
+  /// The short working shown on the calculator pictures (2.7).
+  var brief: [String]? = nil
 }
 struct SolvedPage: Codable, Sendable {
   let readable: Bool
@@ -28,6 +30,8 @@ struct SavedSolution: Identifiable {
   let date: Date
   let pdf: URL
   let source: URL
+  /// The folder of fx-CG50 pictures to copy to the calculator (2.7), e.g. ".../SOL1020A".
+  var calculator: URL? = nil
 }
 
 @MainActor
@@ -44,6 +48,7 @@ private struct StoredSolution: Codable {
   let date: Date
   let firstPhoto: String
   let solution: SolvedPage
+  var calculator: String? = nil
 }
 
 /// One folder per packet in Files › On My iPhone › Glasses Solver › Solutions, named by date and title, holding
@@ -113,17 +118,49 @@ struct SolutionStore: SolutionSaving {
       for (original, name) in zip(sources, names) {
         try FileManager.default.copyItem(at: original, to: folder.appendingPathComponent(name))
       }
-      let stored = StoredSolution(id: id, date: date, firstPhoto: names[0], solution: page)
+      // One picture per subquestion for the fx-CG50, in a folder named for the calculator (8.3 names).
+      let calculatorName = CalculatorLayout.folderName(date: date, taken: Self.calculatorFolders())
+      let calculator = folder.appendingPathComponent(calculatorName, isDirectory: true)
+      let pictures = try await Task.detached(priority: .userInitiated) { try CalculatorPictures.write(page, into: calculator) }.value
+      let stored = StoredSolution(id: id, date: date, firstPhoto: names[0], solution: page,
+        calculator: pictures.isEmpty ? nil : calculatorName)
       try JSONEncoder().encode(stored).write(to: folder.appendingPathComponent(Self.record), options: .atomic)
       if let old, old != folderName, !old.contains("/"), !old.hasPrefix(".") {
         try? FileManager.default.removeItem(at: Self.directory.appendingPathComponent(old, isDirectory: true))
       }
-      return SavedSolution(id: id, title: page.title, date: date, pdf: pdf, source: folder.appendingPathComponent(names[0]))
+      return SavedSolution(id: id, title: page.title, date: date, pdf: pdf, source: folder.appendingPathComponent(names[0]),
+        calculator: pictures.isEmpty ? nil : calculator)
     } catch {
       try? FileManager.default.removeItem(at: folder)
       throw error
     }
   }
+  /// Calculator folder names already used by saved packets, so each packet's folder is unique on the calculator.
+  static func calculatorFolders() -> Set<String> {
+    let files = FileManager.default
+    let packets = (try? files.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+    return Set(packets.flatMap { packet in
+      ((try? files.contentsOfDirectory(atPath: packet.path)) ?? []).filter { $0.hasPrefix("SOL") }
+    })
+  }
+
+  /// A zip of a calculator folder for the share sheet (to a computer, cloud drive or the calculator drive).
+  nonisolated static func zip(_ folder: URL) throws -> URL {
+    var result: URL?, failure: (any Error)?, coordination: NSError?
+    NSFileCoordinator().coordinate(readingItemAt: folder, options: [.forUploading], error: &coordination) { zipped in
+      do {
+        let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let destination = cache.appendingPathComponent(folder.lastPathComponent + ".zip")
+        try? FileManager.default.removeItem(at: destination)
+        try FileManager.default.copyItem(at: zipped, to: destination)
+        result = destination
+      } catch { failure = error }
+    }
+    if let error = coordination ?? failure { throw error }
+    guard let result else { throw SolverError.message("Could not prepare the calculator folder.") }
+    return result
+  }
+
   static func history() -> [SavedSolution] {
     startFresh()
     let folders = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
@@ -133,7 +170,8 @@ struct SolutionStore: SolutionSaving {
       let pdf = folder.appendingPathComponent(SolutionFolder.pdfName)
       guard FileManager.default.fileExists(atPath: pdf.path) else { return nil }
       return SavedSolution(id: stored.id, title: stored.solution.title, date: stored.date, pdf: pdf,
-        source: folder.appendingPathComponent(stored.firstPhoto))
+        source: folder.appendingPathComponent(stored.firstPhoto),
+        calculator: stored.calculator.map { folder.appendingPathComponent($0, isDirectory: true) })
     }.sorted { $0.date > $1.date }
   }
 }

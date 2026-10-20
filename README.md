@@ -20,7 +20,7 @@ A personal iPhone app that turns photos of homework or exam-style question pages
 2. **Solve with both AIs.** Each page is sent with its previous and next page as context. Claude Opus 5.5 and GPT-6 Astra each solve it, then Claude reconciles both drafts against the photo (`PageSolver`, `SolverConfiguration` mode `.both`; one provider if only one key is saved). Answers are strict JSON with a checklist of every visible question label, validated before they are accepted. Unresolved items are marked NEEDS REVIEW.
 3. **Output: one folder per packet**, in Files › On My iPhone › Glasses Solver › Solutions › `<date time title>`:
    - `Solutions.pdf`: every worked solution with typeset math, plus the source photos.
-   - Calculator pictures: every solution rendered as fx-CG50 `.g3p` pictures (384x216), split across as many screens as needed so nothing needs zooming, plus an answers summary. Copy them to the calculator over USB.
+   - A calculator folder (e.g. `SOL1020A`): one fx-CG50 `.g3p` picture per subquestion (384x192, the area under the calculator's status bar) with only the short working and the answer, headed "Q3(b)" and "page 1/2" when it needs more than one. Copy the folder to the calculator over USB. The `.g3p` writer (`G3P.swift`) reproduces Casio's own file byte for byte.
 4. **Optional glasses scanning** (2.0 to 2.6, still in the app): hands-free capture with Ray-Ban Meta glasses, either the live video stream or capture-button photos imported by Meta AI, with an AI check that each page is readable before moving on. The user found the video too blurry and Meta AI's auto-import unreliable, so manual import is now the main path.
 
 ## Architecture in one picture
@@ -43,7 +43,8 @@ Key files (all under `samples/CameraAccess/CameraAccess/`):
 | `Solver/AutoScanView.swift` | Main screen (photo picker, Solve, page queue), PDF list |
 | `Solver/PageSolver.swift` | Page jobs, cross-check solving, page checks, result validation, combining pages |
 | `Solver/BatchSolver.swift` | Provider configuration and models, request bodies, prompts and schemas, streaming parser, speed lanes |
-| `Solver/SolverService.swift` | Packet folder, PDF rendering |
+| `Solver/SolverService.swift` | Packet folder, PDF rendering, calculator folder and its zip |
+| `Solver/G3P.swift`, `CalculatorLayout.swift`, `CalculatorPictures.swift` | fx-CG50 `.g3p` file writer, one-picture-per-subquestion layout, text rendering |
 | `Solver/MathText.swift` | LaTeX in answers: typeset for the PDF (SwiftMath), plain Unicode fallback |
 | `Solver/ScanDraft.swift` | The page draft on disk |
 | `Solver/ButtonPhotos.swift`, `PhotoLibraryInbox.swift` | Capture-button photos from the photo library (2.6) |
